@@ -1,0 +1,29 @@
+name: Publish to NPM
+
+on:
+    release:
+        types: [created]
+
+permissions:
+    id-token: write
+    contents: read
+
+jobs:
+    build:
+        runs-on: ubuntu-latest
+        timeout-minutes: 10
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Setup Node
+              uses: actions/setup-node@v4
+              with:
+                  node-version: "24.x"
+                  registry-url: "https://registry.npmjs.org"
+
+            - name: Install & Build 🔧
+              run: npm i && npm run build
+
+            - name: Publish package on NPM 📦
+              run: npm publish --provenance --access public
