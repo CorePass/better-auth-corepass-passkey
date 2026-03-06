@@ -1,0 +1,84 @@
+name: Report Bug 🪲
+description: Create a bug report
+labels:
+    - bug
+body:
+    - type: markdown
+      attributes:
+          value: |
+              Please provide as many details as possible to help evaluate and resolve the issue faster.
+
+    - type: markdown
+      attributes:
+          value: |
+              Software-specific details.
+
+    - type: input
+      id: os
+      attributes:
+          label: OS and version
+          description: Name and version of OS used.
+          placeholder: macOS 15.2 / Ubuntu 24.04 / Windows 11
+      validations:
+          required: true
+
+    - type: input
+      id: runtime
+      attributes:
+          label: Runtime / platform
+          description: Where are you running Auth.js + this package?
+          placeholder: Node 24 / Cloudflare Workers / Vercel / Bun
+      validations:
+          required: true
+
+    - type: input
+      id: versions
+      attributes:
+          label: Package versions
+          description: authjs-corepass-provider, @auth/core (and adapter package if applicable)
+          placeholder: authjs-corepass-provider@0.x, @auth/core@0.x, @auth/prisma-adapter@x
+      validations:
+          required: true
+
+    - type: textarea
+      id: bug
+      attributes:
+          label: Bug
+          description: Describe the bug.
+          placeholder: Bug description
+      validations:
+          required: true
+
+    - type: textarea
+      id: reproduce
+      attributes:
+          label: Reproduce Bug
+          description: Steps to reproduce the behavior.
+          placeholder: |
+              1. Step 1
+              2. Step 2
+              3. ...
+      validations:
+          required: true
+
+    - type: textarea
+      id: expected
+      attributes:
+          label: Expected behavior
+          description: Describe the result you are expecting.
+          placeholder: Result
+      validations:
+          required: true
+
+    - type: input
+      id: hash
+      attributes:
+          label: Commit hash
+          description: Commit hash if known.
+          placeholder: baf2aab0128f07262b564214ec70fc07befc6bb3
+
+    - type: textarea
+      id: additional
+      attributes:
+          label: Additional context
+          description: Please provide additional content or screenshots.

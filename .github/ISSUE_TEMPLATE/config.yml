@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+    - name: README
+      url: https://github.com/CorePass/better-auth-corepass-passkey#readme
+      about: Read the docs and usage examples
+    - name: Better Auth Passkey Plugin
+      url: https://better-auth.com/docs/plugins/passkey
+      about: Use the Better Auth Passkey plugin as a base
