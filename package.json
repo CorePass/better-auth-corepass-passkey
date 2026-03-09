@@ -1,6 +1,6 @@
 {
 	"name": "better-auth-corepass-passkey",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "Better Auth plugin: CorePass enrichment (POST /webauthn/data) with Ed448 signature verification, built on passkey plugin",
 	"type": "module",
 	"main": "./dist/index.js",
@@ -19,12 +19,12 @@
 		"@better-auth/passkey": ">=1.0.0"
 	},
 	"dependencies": {
-		"@noble/curves": "^1.6.0",
-		"zod": "^4.0.0"
+		"@noble/curves": "^2.0.1",
+		"zod": "^4.3.6"
 	},
 	"devDependencies": {
 		"@better-auth/passkey": "^1.5.4",
 		"better-auth": "^1.5.4",
-		"typescript": "^5.0.0"
+		"typescript": "^5.9.3"
 	}
 }

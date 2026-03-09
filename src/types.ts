@@ -20,8 +20,12 @@ export type EnrichmentBody = {
 };
 
 export type CorePassPluginOptions = {
-	/** When true, require email when registering; enrichment POST is rejected if userData.email is missing or empty. */
+	/** Require email in enrichment payload (userData.email). Default false. Only for POST /webauthn/data. */
 	requireEmail?: boolean;
+	/** Require email from registration form (user must have provided email when registering). Default false. */
+	requireRegistrationEmail?: boolean;
+	/** Require at least one email: from registration or enrichment (enrichment overwrites if provided). Non-verified (registration) allowed. Default false. If neither provided, fail and clean. */
+	requireAtLeastOneEmail?: boolean;
 	/** Finalize: 'immediate' = user active right away; 'after' = on hold until POST /webauthn/data. Default 'after'. */
 	finalize?: 'immediate' | 'after';
 	/** Path used for signature verification. Default /webauthn/data. */
@@ -39,4 +43,24 @@ export type CorePassPluginOptions = {
 	 * Use false or omit to allow any. Applied via passkey create.before database hook.
 	 */
 	allowedAaguids?: string | string[] | false;
+	/**
+	 * Paths that remain accessible when user has no passkey yet. Default [] — only public behaviour applies:
+	 * safe methods (GET, HEAD, OPTIONS) and passkey registration routes. Add paths only if you need extra routes.
+	 */
+	allowRoutesBeforePasskey?: string[];
+	/**
+	 * HTTP methods that are always allowed before first passkey (e.g. GET for session, OPTIONS for CORS).
+	 * Default ['GET', 'HEAD', 'OPTIONS'].
+	 */
+	allowMethodsBeforePasskey?: string[];
+	/**
+	 * Paths used by Better Auth passkey plugin for registration; only needed if you use custom paths.
+	 * Default already includes `/passkey/generate-register-options` and `/passkey/verify-registration`.
+	 */
+	allowPasskeyRegistrationRoutes?: string[];
+	/**
+	 * Accounts that still have no passkey after this many ms since creation are deleted on next request.
+	 * Default 300_000 (5 minutes). Set to 0 to disable.
+	 */
+	deleteAccountWithoutPasskeyAfterMs?: number;
 };

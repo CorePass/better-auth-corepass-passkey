@@ -2,16 +2,19 @@
  * Better Auth plugin: CorePass enrichment for passkey.
  * Adds POST /webauthn/data for signed enrichment payload, corepass_profile schema, requireO18y/requireO21y/requireKyc.
  * Optional allowedAaguids: passkey create.before hook to allow only listed AAGUIDs.
+ * Users without a passkey are blocked from auth endpoints except public behaviour (safe methods + passkey registration).
  * Must be used after @better-auth/passkey.
  */
 
-import { APIError } from 'better-auth/api';
+import { APIError, createAuthMiddleware, getSessionFromCtx } from 'better-auth/api';
 import {
 	createEnrichmentEndpoint,
 	createGetEnrichmentEndpoint,
 	createHeadEnrichmentEndpoint
 } from './enrichment-handler.js';
 import type { CorePassPluginOptions } from './types.js';
+import { hasAnyPasskey, isAllowedBeforePasskey } from './utils/passkey-state.js';
+import { isValidEmail } from './utils/email.js';
 
 function normalizeAaguid(value: string): string {
 	return String(value).toLowerCase().replace(/\s+/g, '').trim();
@@ -62,12 +65,83 @@ export const corepassPasskeySchema = {
 	}
 };
 
+const PASSKEY_REQUIRED_ERROR = {
+	message: 'A passkey is required to access this resource. Complete passkey registration first.',
+	code: 'PASSKEY_REQUIRED' as const
+};
+
+const REGISTRATION_TIMEOUT_ERROR = {
+	message: 'Registration timed out. Add a passkey within the allowed time, or start again.',
+	code: 'REGISTRATION_TIMEOUT' as const
+};
+
+const EMAIL_REQUIRED_ERROR = {
+	message: 'Email is required from registration or enrichment.',
+	code: 'EMAIL_REQUIRED' as const
+};
+
 export function corepassPasskey(options: CorePassPluginOptions = {}) {
 	const allowedAaguids = options.allowedAaguids;
 	const hasAllowlist =
 		allowedAaguids !== undefined &&
 		allowedAaguids !== false &&
 		(Array.isArray(allowedAaguids) ? allowedAaguids.length > 0 : typeof allowedAaguids === 'string');
+
+	const deleteAfterMs = options.deleteAccountWithoutPasskeyAfterMs ?? 300_000;
+	const gateOptions = {
+		allowRoutesBeforePasskey: options.allowRoutesBeforePasskey,
+		allowMethodsBeforePasskey: options.allowMethodsBeforePasskey,
+		allowPasskeyRegistrationRoutes: options.allowPasskeyRegistrationRoutes
+	};
+
+	const beforeHook = {
+		matcher: () => true,
+		handler: createAuthMiddleware(async (ctx) => {
+						const session = await getSessionFromCtx(ctx, { disableRefresh: true });
+						if (!session?.user?.id) {
+							return;
+						}
+						const adapter = ctx.context.adapter as { findOne: (arg: { model: string; where: { field: string; value: unknown }[] }) => Promise<unknown> };
+						const hasPasskey = await hasAnyPasskey(adapter, session.user.id);
+						if (hasPasskey) {
+							const needEmail = options.requireRegistrationEmail || options.requireAtLeastOneEmail;
+							const userEmail = (session.user as { email?: string | null }).email;
+							if (needEmail && !isValidEmail(userEmail)) {
+								const internal = ctx.context.internalAdapter as { deleteUser: (id: string) => Promise<unknown>; deleteSessions: (userId: string) => Promise<unknown> };
+								try {
+									await internal.deleteSessions(session.user.id);
+									await internal.deleteUser(session.user.id);
+								} catch (err) {
+									ctx.context.logger?.error?.('Failed to clean account: email required', err);
+								}
+								throw new APIError('FORBIDDEN', EMAIL_REQUIRED_ERROR);
+							}
+							return;
+						}
+						const path = (ctx as { path?: string }).path ?? '/';
+						const method = (ctx as { method?: string }).method ?? (ctx as { request?: { method?: string } }).request?.method ?? 'GET';
+						if (isAllowedBeforePasskey(path, method, gateOptions)) {
+							return;
+						}
+						if (deleteAfterMs > 0) {
+							const userCreatedAt =
+								(session.user as { createdAt?: Date }).createdAt ??
+								((await adapter.findOne({ model: 'user', where: [{ field: 'id', value: session.user.id }] })) as { createdAt?: Date } | null)?.createdAt;
+							const createdAtMs = userCreatedAt instanceof Date ? userCreatedAt.getTime() : userCreatedAt ? new Date(userCreatedAt).getTime() : 0;
+							if (createdAtMs > 0 && Date.now() - createdAtMs >= deleteAfterMs) {
+								const internal = ctx.context.internalAdapter as { deleteUser: (id: string) => Promise<unknown>; deleteSessions: (userId: string) => Promise<unknown> };
+								try {
+									await internal.deleteSessions(session.user.id);
+									await internal.deleteUser(session.user.id);
+								} catch (err) {
+									ctx.context.logger?.error?.('Failed to delete account without passkey', err);
+								}
+								throw new APIError('FORBIDDEN', REGISTRATION_TIMEOUT_ERROR);
+							}
+						}
+			throw new APIError('FORBIDDEN', PASSKEY_REQUIRED_ERROR);
+		})
+	};
 
 	return {
 		id: 'corepass-passkey',
@@ -96,10 +170,16 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 			}
 			return opts;
 		},
+		hooks: { before: [beforeHook] },
 		endpoints: {
 			passkeyDataHead: createHeadEnrichmentEndpoint(options),
 			passkeyDataGet: createGetEnrichmentEndpoint(options),
 			passkeyData: createEnrichmentEndpoint(options)
+		},
+		$ERROR_CODES: {
+			PASSKEY_REQUIRED: PASSKEY_REQUIRED_ERROR,
+			REGISTRATION_TIMEOUT: REGISTRATION_TIMEOUT_ERROR,
+			EMAIL_REQUIRED: EMAIL_REQUIRED_ERROR
 		}
 	};
 }
