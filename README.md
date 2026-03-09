@@ -6,12 +6,13 @@ Use this plugin **after** the passkey plugin. It registers the `corepass_profile
 
 ## Flow overview
 
-1. **Registration** – User starts passkey registration via Better Auth (passkey plugin). Email can be required at registration (`requireRegistrationEmail`), in enrichment only (`requireEmail`), or at least one of the two (`requireAtLeastOneEmail`). All default false.
+1. **Registration** – User starts passkey registration via Better Auth (passkey plugin). Email can come from a **form** (request body of `POST /sign-in/anonymous`, e.g. `signIn.anonymous({ email })`) and/or from **enrichment** later; enrichment overwrites when provided. If `requireRegistrationEmail` is true, a valid email is required in the request body **before** the account is created (otherwise the request is rejected). If `requireEmail` is true, email is required from enrichment only. If `requireAtLeastOneEmail` is true, email must be provided from at least one source. All emails are validated by regex. Default for all three is false.
 2. **Finalize** – With `finalize: 'immediate'` the user is active right away. With `finalize: 'after'` (default) the user stays on hold until enrichment is received.
 3. **Enrichment** – The CorePass app sends a signed payload to **POST** `{basePath}/webauthn/data` (e.g. `/api/auth/webauthn/data`). The plugin verifies the Ed448 signature over canonical JSON, then:
    - Finds the passkey by `credentialId`, loads the linked user
+   - Validates Core ID (ICAN) with [blockchain-wallet-validator](https://github.com/sergical/blockchain-wallet-validator) (Core/ICAN); if invalid or network not in `allowNetwork`, user and sessions are deleted and an error is returned
    - Enforces `requireO18y` / `requireO21y` / `requireKyc` from `userData` if set
-   - Updates user email when provided
+   - Updates user email when provided (enrichment overwrites any form/placeholder email), and user name from Core ID (first 4 + "…" + last 4 chars, uppercase)
    - Upserts `corepass_profile` (coreId, o18y, o21y, kyc, kycDoc, `providedTill` from `dataExp` in minutes)
    - Sets the passkey’s display name to Core ID (uppercased)
 4. **Data expiry** – If `userData.dataExp` (minutes) is set, the plugin stores `providedTill = now + dataExp * 60`. **GET** `/webauthn/data` returns the profile only while `providedTill >= now`; after that it returns **410 Gone** so the portal cannot read the data.
@@ -28,6 +29,8 @@ The plugin always enforces **passkey-only access**: users without at least one p
 **Timeout and cleanup:** Set `deleteAccountWithoutPasskeyAfterMs` (e.g. `300_000` for 5 minutes). If the user does not add a passkey within that time, the next request deletes the account and sessions and returns **403** with code `REGISTRATION_TIMEOUT`. The client can show "Registration timed out. Please start again." and let the user retry from step 1.
 
 This is **not** “anonymous access” to the app; it is **passkey-only access** after an optional anonymous bootstrap. No email/password sign-up is introduced.
+
+**Anonymous user email:** The client can send a user-defined email in the request body of `POST /sign-in/anonymous` (e.g. `signIn.anonymous({ email: formEmail })`). The plugin applies it to the user after the anonymous account is created (enrichment email, when provided later, overwrites it). If no form email is sent, the Better Auth anonymous plugin may set a generated placeholder; enrichment can overwrite that when provided. All emails are validated by regex.
 
 ## Sequence diagram (registration + enrichment)
 
@@ -91,7 +94,7 @@ All are under your Better Auth `basePath` (e.g. `/api/auth`).
 - `signaturePath` defaults to `/webauthn/data` (configurable via `signaturePath`).
 - `canonicalJsonBody`: object keys sorted alphabetically, JSON stringified with no extra whitespace.
 
-**userData** (all optional): `email`, `o18y`, `o21y`, `kyc`, `kycDoc`, `dataExp` (minutes → stored as `providedTill`). Email: validated with regex (`local@domain.tld`, max 254 chars). Use `requireEmail` to require it in the payload only; `requireRegistrationEmail` to require the form email at registration; `requireAtLeastOneEmail` to require email from registration or enrichment (enrichment overwrites; non-verified registration email allowed). If `requireO18y` / `requireO21y` / `requireKyc` are set, the plugin rejects when the flag is not `true`. After signature verification, if data is invalid or any required check fails, the plugin **deletes that user and their sessions** and then returns an error.
+**userData** (all optional): `email`, `o18y`, `o21y`, `kyc`, `kycDoc`, `dataExp` (minutes → stored as `providedTill`), `backedUp` (boolean: CorePass backed up, not passkey). Email: validated with regex (`local@domain.tld`, max 254 chars). Use `requireEmail` to require it in the payload only; `requireRegistrationEmail` to require the form email at registration; `requireAtLeastOneEmail` to require email from registration or enrichment (enrichment overwrites; non-verified registration email allowed). Core ID is validated as a Core (ICAN) address; invalid IDs or network not in `allowNetwork` cause the user and sessions to be deleted and **400** `CORE_ID_INVALID` or `CORE_ID_NETWORK_NOT_ALLOWED`. If `requireO18y` / `requireO21y` / `requireKyc` are set, the plugin rejects when the flag is not `true`. If `allowOnlyBackedUp` is true, `userData.backedUp` must be present and true or the plugin deletes the user and sessions and returns **400** `BACKED_UP_REQUIRED`. After signature verification, if data is invalid or any required check fails, the plugin **deletes that user and their sessions** and then returns an error.
 
 ## Installation and setup
 
@@ -161,17 +164,32 @@ All are under your Better Auth `basePath` (e.g. `/api/auth`).
 | `finalize` | `'immediate' \| 'after'` | `'after'` | When the user becomes active: `'immediate'` right after passkey registration; `'after'` when enrichment is received. |
 | `signaturePath` | `string` | `'/webauthn/data'` | Path used when building the signature input string. |
 | `timestampWindowMs` | `number` | `600_000` | Allowed clock skew for `timestamp` (microseconds). |
-| `requireEmail` | `boolean` | `false` | Require email **in enrichment payload only** (userData.email in POST /webauthn/data). On failure after signature verification, user and sessions are deleted. |
-| `requireRegistrationEmail` | `boolean` | `false` | Require email from the registration form (user must have provided email when registering). If missing when they have a passkey, account is cleaned and **403** `EMAIL_REQUIRED`. |
-| `requireAtLeastOneEmail` | `boolean` | `false` | Require email from registration or enrichment (enrichment overwrites if provided). Non-verified (registration) allowed. If neither provided, fail and clean (enrichment) or **403** and clean (access). |
+| `requireEmail` | `boolean` | `false` | Require email **in enrichment payload only** (userData.email in POST /webauthn/data). Validated by regex. On failure after signature verification, user and sessions are deleted. |
+| `requireRegistrationEmail` | `boolean` | `false` | Require valid email in the **request body** of POST /sign-in/anonymous (e.g. `signIn.anonymous({ email })`) **before** the account is created. If missing or invalid, request is rejected (**400**). If user has passkey but still no valid email, account is cleaned and **403** `EMAIL_REQUIRED`. |
+| `requireAtLeastOneEmail` | `boolean` | `false` | Require email from at least one source: registration (form body) or enrichment. Enrichment overwrites when provided. All validated by regex. If neither provided, fail and clean (enrichment) or **403** and clean (access). |
 | `requireO18y` | `boolean` | `false` | Reject enrichment if `userData.o18y` is not true. On failure (after signature verification), the user and sessions are deleted. |
 | `requireO21y` | `boolean` | `false` | Reject enrichment if `userData.o21y` is not true. On failure (after signature verification), the user and sessions are deleted. |
 | `requireKyc` | `boolean` | `false` | Reject enrichment if `userData.kyc` is not true. On failure (after signature verification), the user and sessions are deleted. |
-| `allowedAaguids` | `string \| string[] \| false` | — | AAGUID allowlist for passkey registration. When set (string or non-empty array), only these authenticator AAGUIDs are accepted (enforced via passkey `create.before` DB hook). Use `false` or omit to allow any. |
-| `allowRoutesBeforePasskey` | `string[]` | `[]` | No extra routes by default. Only public behaviour applies: safe methods (GET, HEAD, OPTIONS) and passkey registration routes. Add paths only if you need more. |
+| `allowNetwork` | `('mainnet' \| 'testnet' \| 'enterprise')[] \| true \| false` | `['mainnet', 'enterprise']` | Which Core (ICAN) networks to allow in enrichment. Array of allowed networks, or `true` (= mainnet only), or `false` (= testnet only). If Core ID's network is not in the list, user/sessions are deleted and **400** `CORE_ID_NETWORK_NOT_ALLOWED`. |
+| `allowOnlyBackedUp` | `boolean` | `false` | When true, require `userData.backedUp` to be present and true in enrichment (CorePass backed up). If not, user/sessions are deleted and **400** `BACKED_UP_REQUIRED`. |
+| `allowedAaguids` | `string \| string[] \| false` | Core Pass AAGUID `636f7265-7061-7373-6964-656e74696679` | AAGUID allowlist for passkey registration. Default restricts to Core Pass. Use a string (one), string[] (many), or `false` to allow any authenticator. Enforced via passkey `create.before` DB hook. |
+| `allowRoutesBeforePasskey` | `string[]` | `[]` | Routes allowed when user has no passkey (in addition to safe methods and passkey registration). Add paths only if needed. |
 | `allowMethodsBeforePasskey` | `string[]` | `['GET', 'HEAD', 'OPTIONS']` | HTTP methods always allowed before first passkey (e.g. session fetch). |
 | `allowPasskeyRegistrationRoutes` | `string[]` | `['/passkey/generate-register-options', '/passkey/verify-registration']` | Only needed if you use custom passkey paths. Default already allows registration; leave unset otherwise. |
 | `deleteAccountWithoutPasskeyAfterMs` | `number` | `300_000` (5 min) | Accounts with no passkey after this many ms since creation are deleted on next request (sessions + user). Response **403** with code `REGISTRATION_TIMEOUT`. Set to 0 to disable. |
+
+Only **anonymous registration** can be restarted: when a user with no passkey POSTs to **`/sign-in/anonymous`** ([anonymous plugin](https://www.better-auth.com/docs/plugins/anonymous)), the plugin deletes that user/sessions and returns so the handler can create a new one. The same user can therefore start over by calling sign-in anonymous again. **Sign-in is not reset** (email, OAuth, etc.). For email/password or OAuth accounts without a passkey, the plugin does not offer restart; the user gets **403** `REGISTRATION_TIMEOUT` after `deleteAccountWithoutPasskeyAfterMs` and should be told to wait for expiration and retry.
+
+### Better Auth paths this plugin uses or allows
+
+| Path | Method | Behaviour |
+| --- | --- | --- |
+| `/sign-in/anonymous` | POST | **Restart registration** (anonymous only): delete current user/sessions so handler can create a new one. |
+| `/passkey/generate-register-options`, `/passkey/verify-registration` | POST | Allowed before passkey (passkey plugin). |
+| `/webauthn/data` | HEAD, GET, POST | Plugin enrichment endpoint (POST requires passkey after registration). |
+| `/get-session` | GET | Allowed (safe method). |
+
+Other paths (e.g. `/sign-up/email`, `/sign-in/email`, OAuth callbacks, `/sign-out`) are not restarted; if the user has no passkey they are blocked (or timeout) and the client should show "wait for expiration and retry" where applicable.
 
 ## Schema
 

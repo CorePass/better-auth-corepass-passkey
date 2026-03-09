@@ -2,9 +2,10 @@
  * webauthn/data endpoints:
  * - HEAD: 200 if enrichment is available (finalize "after"), 404 if not (e.g. "immediate").
  * - GET: session required; returns corepass_profile for current user only if providedTill is not set or providedTill >= now; 410 Gone if expired (portal cannot get data).
- * - POST: verify Ed448 signature, validate requireEmail/requireO18y/requireO21y/requireKyc and coreId; on any validation failure after signature verification, delete that user and sessions then throw. On success, store enrichment, update user email, update passkey name to Core ID (uppercased).
+ * - POST: verify Ed448 signature, validate requireEmail/requireO18y/requireO21y/requireKyc and coreId; on any validation failure after signature verification, delete that user and sessions then throw. On success, store enrichment, update user email and name (name = first 4 + "…" + last 4 of Core ID, uppercase), update passkey name to Core ID (uppercased).
  */
 
+import { validateWalletAddress } from 'blockchain-wallet-validator';
 import { createAuthEndpoint, APIError, getSessionFromCtx, sessionMiddleware } from 'better-auth/api';
 import { z } from 'zod';
 import { canonicalizeJSON, buildSignatureInput } from './utils/canonical.js';
@@ -29,7 +30,8 @@ const enrichmentBodySchema = z.object({
 			o21y: z.union([z.boolean(), z.number()]).optional(),
 			kyc: z.union([z.boolean(), z.number()]).optional(),
 			kycDoc: z.string().optional(),
-			dataExp: z.number().optional()
+			dataExp: z.number().optional(),
+			backedUp: z.boolean().optional()
 		})
 		.optional()
 });
@@ -41,6 +43,14 @@ function toBool(v: boolean | number | undefined): boolean {
 	if (v === true || v === 1) return true;
 	if (v === false || v === 0) return false;
 	return false;
+}
+
+/** Format Core ID as display name: first 4 chars (uppercase), "…", last 4 chars (uppercase). */
+function coreIdToDisplayName(coreId: string): string {
+	const s = coreId.trim();
+	const first4 = s.slice(0, 4).toUpperCase();
+	const last4 = s.slice(-4).toUpperCase();
+	return `${first4}…${last4}`;
 }
 
 /** HEAD /webauthn/data: 200 if enrichment flow is available (finalize "after"), 404 if immediate. */
@@ -92,7 +102,7 @@ export function createGetEnrichmentEndpoint(options: CorePassPluginOptions) {
 			if (!profile) {
 				return new Response(null, { status: 404 });
 			}
-			const row = profile as { userId: string; coreId: string; o18y: number; o21y: number; kyc: number; kycDoc: string | null; providedTill: number | null };
+			const row = profile as { userId: string; coreId: string; o18y: number; o21y: number; kyc: number; kycDoc: string | null; backedUp: number | null; providedTill: number | null };
 			const now = Math.floor(Date.now() / 1000);
 			if (row.providedTill != null && row.providedTill < now) {
 				return new Response(JSON.stringify({ error: 'Enrichment data expired', code: 'PROVIDED_TILL_EXPIRED', hasPasskey, finalized: hasPasskey }), {
@@ -107,6 +117,7 @@ export function createGetEnrichmentEndpoint(options: CorePassPluginOptions) {
 				o21y: !!row.o21y,
 				kyc: !!row.kyc,
 				kycDoc: row.kycDoc,
+				backedUp: !!row.backedUp,
 				providedTill: row.providedTill,
 				hasPasskey,
 				finalized: true
@@ -134,21 +145,21 @@ export function createEnrichmentEndpoint(options: CorePassPluginOptions) {
 			const body = ctx.body as EnrichmentBody;
 			const { coreId, credentialId, timestamp, userData } = body;
 			if (!coreId || !credentialId || typeof timestamp !== 'number') {
-				throw new APIError('BAD_REQUEST', { message: 'coreId, credentialId, and timestamp are required' });
+				throw new APIError('BAD_REQUEST', { message: 'coreId, credentialId, and timestamp are required.' });
 			}
 
 			const nowUs = Date.now() * 1000;
 			if (Math.abs(timestamp - nowUs) > timestampWindowMs * 1000) {
-				throw new APIError('BAD_REQUEST', { message: 'timestamp out of window' });
+				throw new APIError('BAD_REQUEST', { message: 'timestamp out of window.' });
 			}
 
 			const signatureRaw = ctx.headers?.get('X-Signature');
 			if (!signatureRaw) {
-				throw new APIError('UNAUTHORIZED', { message: 'X-Signature header required' });
+				throw new APIError('UNAUTHORIZED', { message: 'X-Signature header required.' });
 			}
 			const signatureBytes = parseEd448Signature(signatureRaw);
 			if (!signatureBytes || signatureBytes.length !== 114) {
-				throw new APIError('BAD_REQUEST', { message: 'Invalid X-Signature' });
+				throw new APIError('BAD_REQUEST', { message: 'Invalid X-Signature.' });
 			}
 
 			let publicKeyBytes: Uint8Array | null = parseEd448PublicKey(ctx.headers?.get('X-Public-Key') ?? '');
@@ -157,7 +168,7 @@ export function createEnrichmentEndpoint(options: CorePassPluginOptions) {
 			}
 			if (!publicKeyBytes) {
 				throw new APIError('BAD_REQUEST', {
-					message: 'Provide long-form Core ID (BBAN 114 hex) or X-Public-Key header'
+					message: 'Provide long-form Core ID (BBAN 114 hex) or X-Public-Key header.'
 				});
 			}
 
@@ -175,7 +186,7 @@ export function createEnrichmentEndpoint(options: CorePassPluginOptions) {
 				signatureBytes
 			});
 			if (!valid) {
-				throw new APIError('UNAUTHORIZED', { message: 'Signature verification failed' });
+				throw new APIError('UNAUTHORIZED', { message: 'Signature verification failed.' });
 			}
 
 			const adapter = ctx.context.adapter as Adapter;
@@ -184,7 +195,7 @@ export function createEnrichmentEndpoint(options: CorePassPluginOptions) {
 				where: [{ field: 'credentialID', value: credentialId }]
 			});
 			if (!passkey) {
-				throw new APIError('NOT_FOUND', { message: 'Passkey not found for credentialId' });
+				throw new APIError('NOT_FOUND', { message: 'Passkey not found for this credential.' });
 			}
 			const userId = (passkey as { userId: string }).userId;
 
@@ -201,25 +212,60 @@ export function createEnrichmentEndpoint(options: CorePassPluginOptions) {
 			};
 
 			if (!coreId?.trim()) {
-				await failAndClean(new APIError('BAD_REQUEST', { message: 'coreId is required and must be non-empty' }));
+				await failAndClean(new APIError('BAD_REQUEST', { message: 'Core ID is required.' }));
 			}
 			if (options.requireO18y && !toBool(data.o18y)) {
-				await failAndClean(new APIError('BAD_REQUEST', { message: 'requireO18y: o18y must be true' }));
+				await failAndClean(new APIError('BAD_REQUEST', { message: 'You must be at least 18.' }));
 			}
 			if (options.requireO21y && !toBool(data.o21y)) {
-				await failAndClean(new APIError('BAD_REQUEST', { message: 'requireO21y: o21y must be true' }));
+				await failAndClean(new APIError('BAD_REQUEST', { message: 'You must be at least 21.' }));
 			}
 			if (options.requireKyc && !toBool(data.kyc)) {
-				await failAndClean(new APIError('BAD_REQUEST', { message: 'requireKyc: kyc must be true' }));
+				await failAndClean(new APIError('BAD_REQUEST', { message: 'You need to be KYCed to register.' }));
 			}
 			if (options.requireEmail) {
 				const enrichmentEmail = typeof data.email === 'string' ? data.email.trim() : '';
 				if (!isValidEmail(enrichmentEmail)) {
-					await failAndClean(new APIError('BAD_REQUEST', { message: 'requireEmail: valid email is required in enrichment payload' }));
+					await failAndClean(new APIError('BAD_REQUEST', { message: 'Valid email required.' }));
 				}
 			}
+			if (options.allowOnlyBackedUp && !toBool(data.backedUp)) {
+				await failAndClean(new APIError('BAD_REQUEST', {
+					message: 'Back up CorePass passphrase first.',
+					code: 'BACKED_UP_REQUIRED'
+				}));
+			}
 
-			const coreIdUpper = coreId.trim().toUpperCase();
+			const coreIdTrimmed = coreId.trim();
+			const rawAllow = options.allowNetwork;
+			const allowedNetworks = ((): Set<'mainnet' | 'testnet' | 'enterprise'> => {
+				if (rawAllow === true) return new Set(['mainnet']);
+				if (rawAllow === false) return new Set(['testnet']);
+				if (Array.isArray(rawAllow) && rawAllow.length > 0) return new Set(rawAllow);
+				return new Set(['mainnet', 'enterprise']);
+			})();
+			const coreValidation = validateWalletAddress(coreIdTrimmed, {
+				network: ['xcb'],
+				testnet: true
+			});
+			if (!coreValidation.isValid) {
+				await failAndClean(new APIError('BAD_REQUEST', {
+					message: 'Valid Core ID required.',
+					code: 'CORE_ID_INVALID'
+				}));
+			}
+			const meta = coreValidation.metadata as { isTestnet?: boolean; isEnterprise?: boolean } | undefined;
+			const isTestnet = meta?.isTestnet === true;
+			const isEnterprise = meta?.isEnterprise === true;
+			const network: 'mainnet' | 'testnet' | 'enterprise' = isTestnet ? 'testnet' : isEnterprise ? 'enterprise' : 'mainnet';
+			if (!allowedNetworks.has(network)) {
+				await failAndClean(new APIError('BAD_REQUEST', {
+					message: `Must use Core ${network}.`,
+					code: 'CORE_ID_NETWORK_NOT_ALLOWED'
+				}));
+			}
+
+			const coreIdUpper = coreIdTrimmed.toUpperCase();
 			const rawEnrichmentEmail = typeof data.email === 'string' ? data.email.trim() : '';
 			const enrichmentEmailValue = isValidEmail(rawEnrichmentEmail) ? rawEnrichmentEmail : null;
 			const dataExpMinutes = typeof data.dataExp === 'number' ? data.dataExp : null;
@@ -240,19 +286,19 @@ export function createEnrichmentEndpoint(options: CorePassPluginOptions) {
 			const registrationEmail = isValidEmail(rawRegistrationEmail) ? rawRegistrationEmail : null;
 			const effectiveEmail = enrichmentEmailValue ?? registrationEmail;
 
-			const userUpdate: Record<string, unknown> = {};
+			const userUpdate: Record<string, unknown> = {
+				name: coreIdToDisplayName(coreId)
+			};
 			if (enrichmentEmailValue) userUpdate.email = enrichmentEmailValue;
-			if (Object.keys(userUpdate).length > 0) {
-				await adapter.update({
-					model: 'user',
-					where: [{ field: 'id', value: userId }],
-					update: userUpdate
-				});
-			}
+			await adapter.update({
+				model: 'user',
+				where: [{ field: 'id', value: userId }],
+				update: userUpdate
+			});
 
 			if (options.requireAtLeastOneEmail && !isValidEmail(effectiveEmail)) {
 				await failAndClean(new APIError('BAD_REQUEST', {
-					message: 'requireAtLeastOneEmail: valid email is required from registration or enrichment'
+					message: 'Registration requires a valid email address.'
 				}));
 			}
 
