@@ -24,6 +24,7 @@
 	},
 	"dependencies": {
 		"@noble/curves": "^2.0.1",
+		"blockchain-wallet-validator": "^1.2.1",
 		"zod": "^4.3.6"
 	},
 	"devDependencies": {

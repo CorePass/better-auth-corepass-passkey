@@ -80,6 +80,21 @@ const EMAIL_REQUIRED_ERROR = {
 	code: 'EMAIL_REQUIRED' as const
 };
 
+const CORE_ID_INVALID_ERROR = {
+	message: 'Core ID (ICAN) is invalid.',
+	code: 'CORE_ID_INVALID' as const
+};
+
+const CORE_ID_NETWORK_NOT_ALLOWED_ERROR = {
+	message: 'Core ID network (mainnet/testnet/enterprise) is not allowed.',
+	code: 'CORE_ID_NETWORK_NOT_ALLOWED' as const
+};
+
+const BACKED_UP_REQUIRED_ERROR = {
+	message: 'CorePass must be backed up.',
+	code: 'BACKED_UP_REQUIRED' as const
+};
+
 /** Only anonymous registration can be restarted: POST /sign-in/anonymous. Sign-in (email, OAuth) is not reset; user must wait for expiration and retry. */
 const RESTART_REGISTRATION_PATH = '/sign-in/anonymous';
 
@@ -108,8 +123,21 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 	const beforeHook = {
 		matcher: () => true,
 		handler: createAuthMiddleware(async (ctx) => {
+						const path = (ctx as { path?: string }).path ?? '/';
+						const method = (ctx as { method?: string }).method ?? (ctx as { request?: { method?: string } }).request?.method ?? 'GET';
+						const pathNorm = path.replace(/\/+$/, '') || '/';
 						const session = await getSessionFromCtx(ctx, { disableRefresh: true });
 						if (!session?.user?.id) {
+							if (method.toUpperCase() === 'POST' && pathNorm === RESTART_REGISTRATION_PATH && options.requireRegistrationEmail) {
+								const body = (ctx as { body?: { email?: string } }).body ?? {};
+								const email = typeof body.email === 'string' ? body.email.trim() : '';
+								if (!isValidEmail(email)) {
+									throw new APIError('BAD_REQUEST', {
+										message: 'requireRegistrationEmail: valid email is required in request body (e.g. signIn.anonymous({ email }))',
+										code: 'EMAIL_REQUIRED'
+									});
+								}
+							}
 							return;
 						}
 						const adapter = ctx.context.adapter as { findOne: (arg: { model: string; where: { field: string; value: unknown }[] }) => Promise<unknown> };
@@ -129,9 +157,6 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 							}
 							return;
 						}
-						const path = (ctx as { path?: string }).path ?? '/';
-						const method = (ctx as { method?: string }).method ?? (ctx as { request?: { method?: string } }).request?.method ?? 'GET';
-						const pathNorm = path.replace(/\/+$/, '') || '/';
 						if (method.toUpperCase() === 'POST' && pathNorm === RESTART_REGISTRATION_PATH) {
 							const internal = ctx.context.internalAdapter as { deleteUser: (id: string) => Promise<unknown>; deleteSessions: (userId: string) => Promise<unknown> };
 							try {
@@ -165,6 +190,29 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 		})
 	};
 
+	const afterHook = {
+		matcher: () => true,
+		handler: createAuthMiddleware(async (ctx) => {
+			const path = (ctx as { path?: string }).path ?? '/';
+			const method = (ctx as { method?: string }).method ?? (ctx as { request?: { method?: string } }).request?.method ?? 'GET';
+			const pathNorm = path.replace(/\/+$/, '') || '/';
+			if (method.toUpperCase() !== 'POST' || pathNorm !== RESTART_REGISTRATION_PATH) return;
+			const session = await getSessionFromCtx(ctx, { disableRefresh: true });
+			if (!session?.user?.id) return;
+			const body = (ctx as { body?: { email?: string } }).body ?? {};
+			const email = typeof body.email === 'string' ? body.email.trim() : '';
+			if (!isValidEmail(email)) return;
+			const adapter = ctx.context.adapter as {
+				update: (arg: { model: string; where: { field: string; value: unknown }[]; update: Record<string, unknown> }) => Promise<unknown>;
+			};
+			await adapter.update({
+				model: 'user',
+				where: [{ field: 'id', value: session.user.id }],
+				update: { email }
+			});
+		})
+	};
+
 	return {
 		id: 'corepass-passkey',
 		schema: corepassPasskeySchema,
@@ -192,7 +240,7 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 			}
 			return opts;
 		},
-		hooks: { before: [beforeHook] },
+		hooks: { before: [beforeHook], after: [afterHook] },
 		endpoints: {
 			passkeyDataHead: createHeadEnrichmentEndpoint(options),
 			passkeyDataGet: createGetEnrichmentEndpoint(options),
@@ -201,7 +249,10 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 		$ERROR_CODES: {
 			PASSKEY_REQUIRED: PASSKEY_REQUIRED_ERROR,
 			REGISTRATION_TIMEOUT: REGISTRATION_TIMEOUT_ERROR,
-			EMAIL_REQUIRED: EMAIL_REQUIRED_ERROR
+			EMAIL_REQUIRED: EMAIL_REQUIRED_ERROR,
+			CORE_ID_INVALID: CORE_ID_INVALID_ERROR,
+			CORE_ID_NETWORK_NOT_ALLOWED: CORE_ID_NETWORK_NOT_ALLOWED_ERROR,
+			BACKED_UP_REQUIRED: BACKED_UP_REQUIRED_ERROR
 		}
 	};
 }
