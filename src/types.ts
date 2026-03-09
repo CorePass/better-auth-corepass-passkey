@@ -39,8 +39,9 @@ export type CorePassPluginOptions = {
 	/** Reject enrichment if userData.kyc !== true. */
 	requireKyc?: boolean;
 	/**
-	 * AAGUID allowlist for passkey registration. When set, only these authenticator AAGUIDs are accepted.
-	 * Use false or omit to allow any. Applied via passkey create.before database hook.
+	 * AAGUID allowlist for passkey registration. Only these authenticator AAGUIDs are accepted.
+	 * Default: Core Pass AAGUID `636f7265-7061-7373-6964-656e74696679`. Use string (one), string[] (many), or false to allow any.
+	 * Applied via passkey create.before database hook.
 	 */
 	allowedAaguids?: string | string[] | false;
 	/**

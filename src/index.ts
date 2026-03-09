@@ -80,12 +80,23 @@ const EMAIL_REQUIRED_ERROR = {
 	code: 'EMAIL_REQUIRED' as const
 };
 
+/** Only anonymous registration can be restarted: POST /sign-in/anonymous. Sign-in (email, OAuth) is not reset; user must wait for expiration and retry. */
+const RESTART_REGISTRATION_PATH = '/sign-in/anonymous';
+
+/** Default AAGUID for Core Pass authenticator. Use allowedAaguids: false to allow any. */
+const DEFAULT_AAGUID = '636f7265-7061-7373-6964-656e74696679';
+
 export function corepassPasskey(options: CorePassPluginOptions = {}) {
-	const allowedAaguids = options.allowedAaguids;
-	const hasAllowlist =
-		allowedAaguids !== undefined &&
-		allowedAaguids !== false &&
-		(Array.isArray(allowedAaguids) ? allowedAaguids.length > 0 : typeof allowedAaguids === 'string');
+	const raw = options.allowedAaguids;
+	const effectiveAllowlist: string | string[] | null =
+		raw === false
+			? null
+			: raw === undefined
+				? DEFAULT_AAGUID
+				: Array.isArray(raw)
+					? (raw.length === 0 ? null : raw)
+					: raw;
+	const hasAllowlist = effectiveAllowlist !== null;
 
 	const deleteAfterMs = options.deleteAccountWithoutPasskeyAfterMs ?? 300_000;
 	const gateOptions = {
@@ -120,6 +131,17 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 						}
 						const path = (ctx as { path?: string }).path ?? '/';
 						const method = (ctx as { method?: string }).method ?? (ctx as { request?: { method?: string } }).request?.method ?? 'GET';
+						const pathNorm = path.replace(/\/+$/, '') || '/';
+						if (method.toUpperCase() === 'POST' && pathNorm === RESTART_REGISTRATION_PATH) {
+							const internal = ctx.context.internalAdapter as { deleteUser: (id: string) => Promise<unknown>; deleteSessions: (userId: string) => Promise<unknown> };
+							try {
+								await internal.deleteSessions(session.user.id);
+								await internal.deleteUser(session.user.id);
+							} catch (err) {
+								ctx.context.logger?.error?.('Failed to delete user for registration restart', err);
+							}
+							return;
+						}
 						if (isAllowedBeforePasskey(path, method, gateOptions)) {
 							return;
 						}
@@ -155,7 +177,7 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 							create: {
 								before: async (data: { aaguid?: string | null }, _context: unknown) => {
 									const aaguid = data?.aaguid;
-									if (!isAaguidAllowed(aaguid ?? undefined, allowedAaguids as string | string[])) {
+									if (!isAaguidAllowed(aaguid ?? undefined, effectiveAllowlist)) {
 										throw new APIError('BAD_REQUEST', {
 											message: 'Authenticator not allowed by AAGUID policy',
 											code: 'AAGUID_NOT_ALLOWED'

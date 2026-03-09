@@ -167,11 +167,24 @@ All are under your Better Auth `basePath` (e.g. `/api/auth`).
 | `requireO18y` | `boolean` | `false` | Reject enrichment if `userData.o18y` is not true. On failure (after signature verification), the user and sessions are deleted. |
 | `requireO21y` | `boolean` | `false` | Reject enrichment if `userData.o21y` is not true. On failure (after signature verification), the user and sessions are deleted. |
 | `requireKyc` | `boolean` | `false` | Reject enrichment if `userData.kyc` is not true. On failure (after signature verification), the user and sessions are deleted. |
-| `allowedAaguids` | `string \| string[] \| false` | — | AAGUID allowlist for passkey registration. When set (string or non-empty array), only these authenticator AAGUIDs are accepted (enforced via passkey `create.before` DB hook). Use `false` or omit to allow any. |
-| `allowRoutesBeforePasskey` | `string[]` | `[]` | No extra routes by default. Only public behaviour applies: safe methods (GET, HEAD, OPTIONS) and passkey registration routes. Add paths only if you need more. |
+| `allowedAaguids` | `string \| string[] \| false` | Core Pass AAGUID `636f7265-7061-7373-6964-656e74696679` | AAGUID allowlist for passkey registration. Default restricts to Core Pass. Use a string (one), string[] (many), or `false` to allow any authenticator. Enforced via passkey `create.before` DB hook. |
+| `allowRoutesBeforePasskey` | `string[]` | `[]` | Routes allowed when user has no passkey (in addition to safe methods and passkey registration). Add paths only if needed. |
 | `allowMethodsBeforePasskey` | `string[]` | `['GET', 'HEAD', 'OPTIONS']` | HTTP methods always allowed before first passkey (e.g. session fetch). |
 | `allowPasskeyRegistrationRoutes` | `string[]` | `['/passkey/generate-register-options', '/passkey/verify-registration']` | Only needed if you use custom passkey paths. Default already allows registration; leave unset otherwise. |
 | `deleteAccountWithoutPasskeyAfterMs` | `number` | `300_000` (5 min) | Accounts with no passkey after this many ms since creation are deleted on next request (sessions + user). Response **403** with code `REGISTRATION_TIMEOUT`. Set to 0 to disable. |
+
+Only **anonymous registration** can be restarted: when a user with no passkey POSTs to **`/sign-in/anonymous`** ([anonymous plugin](https://www.better-auth.com/docs/plugins/anonymous)), the plugin deletes that user/sessions and returns so the handler can create a new one. The same user can therefore start over by calling sign-in anonymous again. **Sign-in is not reset** (email, OAuth, etc.). For email/password or OAuth accounts without a passkey, the plugin does not offer restart; the user gets **403** `REGISTRATION_TIMEOUT` after `deleteAccountWithoutPasskeyAfterMs` and should be told to wait for expiration and retry.
+
+### Better Auth paths this plugin uses or allows
+
+| Path | Method | Behaviour |
+| --- | --- | --- |
+| `/sign-in/anonymous` | POST | **Restart registration** (anonymous only): delete current user/sessions so handler can create a new one. |
+| `/passkey/generate-register-options`, `/passkey/verify-registration` | POST | Allowed before passkey (passkey plugin). |
+| `/webauthn/data` | HEAD, GET, POST | Plugin enrichment endpoint (POST requires passkey after registration). |
+| `/get-session` | GET | Allowed (safe method). |
+
+Other paths (e.g. `/sign-up/email`, `/sign-in/email`, OAuth callbacks, `/sign-out`) are not restarted; if the user has no passkey they are blocked (or timeout) and the client should show "wait for expiration and retry" where applicable.
 
 ## Schema
 
