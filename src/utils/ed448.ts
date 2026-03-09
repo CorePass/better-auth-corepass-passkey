@@ -66,7 +66,7 @@ export async function verifyEd448(args: {
 	const { publicKeyBytes, messageBytes, signatureBytes } = args;
 	if (publicKeyBytes.length !== 57 || signatureBytes.length !== 114) return false;
 	try {
-		const { ed448 } = await import('@noble/curves/ed448');
+		const { ed448 } = await import('@noble/curves/ed448.js');
 		return ed448.verify(signatureBytes, messageBytes, publicKeyBytes);
 	} catch {
 		return false;

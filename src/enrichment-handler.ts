@@ -2,7 +2,7 @@
  * webauthn/data endpoints:
  * - HEAD: 200 if enrichment is available (finalize "after"), 404 if not (e.g. "immediate").
  * - GET: session required; returns corepass_profile for current user only if providedTill is not set or providedTill >= now; 410 Gone if expired (portal cannot get data).
- * - POST: verify Ed448 signature, validate requireEmail/requireO18y/requireO21y/requireKyc, store enrichment, update user email, update passkey name to Core ID (uppercased).
+ * - POST: verify Ed448 signature, validate requireEmail/requireO18y/requireO21y/requireKyc and coreId; on any validation failure after signature verification, delete that user and sessions then throw. On success, store enrichment, update user email, update passkey name to Core ID (uppercased).
  */
 
 import { createAuthEndpoint, APIError, getSessionFromCtx, sessionMiddleware } from 'better-auth/api';
@@ -14,6 +14,7 @@ import {
 	publicKeyFromCoreIdLongForm,
 	verifyEd448
 } from './utils/ed448.js';
+import { hasAnyPasskey } from './utils/passkey-state.js';
 import type { CorePassPluginOptions, EnrichmentBody, EnrichmentUserData } from './types.js';
 
 const enrichmentBodySchema = z.object({
@@ -82,6 +83,7 @@ export function createGetEnrichmentEndpoint(options: CorePassPluginOptions) {
 				throw new APIError('UNAUTHORIZED', { message: 'Session required' });
 			}
 			const adapter = ctx.context.adapter as Adapter;
+			const hasPasskey = await hasAnyPasskey(adapter, session.user.id);
 			const profile = await adapter.findOne({
 				model: 'corepass_profile',
 				where: [{ field: 'userId', value: session.user.id }]
@@ -92,7 +94,7 @@ export function createGetEnrichmentEndpoint(options: CorePassPluginOptions) {
 			const row = profile as { userId: string; coreId: string; o18y: number; o21y: number; kyc: number; kycDoc: string | null; providedTill: number | null };
 			const now = Math.floor(Date.now() / 1000);
 			if (row.providedTill != null && row.providedTill < now) {
-				return new Response(JSON.stringify({ error: 'Enrichment data expired', code: 'PROVIDED_TILL_EXPIRED' }), {
+				return new Response(JSON.stringify({ error: 'Enrichment data expired', code: 'PROVIDED_TILL_EXPIRED', hasPasskey, finalized: hasPasskey }), {
 					status: 410,
 					headers: { 'Content-Type': 'application/json' }
 				});
@@ -104,7 +106,9 @@ export function createGetEnrichmentEndpoint(options: CorePassPluginOptions) {
 				o21y: !!row.o21y,
 				kyc: !!row.kyc,
 				kycDoc: row.kycDoc,
-				providedTill: row.providedTill
+				providedTill: row.providedTill,
+				hasPasskey,
+				finalized: true
 			});
 		}
 	);
@@ -173,24 +177,7 @@ export function createEnrichmentEndpoint(options: CorePassPluginOptions) {
 				throw new APIError('UNAUTHORIZED', { message: 'Signature verification failed' });
 			}
 
-			const data = (userData ?? {}) as EnrichmentUserData;
-			if (options.requireO18y && !toBool(data.o18y)) {
-				throw new APIError('BAD_REQUEST', { message: 'requireO18y: o18y must be true' });
-			}
-			if (options.requireO21y && !toBool(data.o21y)) {
-				throw new APIError('BAD_REQUEST', { message: 'requireO21y: o21y must be true' });
-			}
-			if (options.requireKyc && !toBool(data.kyc)) {
-				throw new APIError('BAD_REQUEST', { message: 'requireKyc: kyc must be true' });
-			}
-			if (options.requireEmail) {
-				const email = typeof data.email === 'string' ? data.email.trim() : '';
-				if (!email) {
-					throw new APIError('BAD_REQUEST', { message: 'requireEmail: email is required' });
-				}
-			}
-
-			const adapter = ctx.context.adapter;
+			const adapter = ctx.context.adapter as Adapter;
 			const passkey = await adapter.findOne({
 				model: 'passkey',
 				where: [{ field: 'credentialID', value: credentialId }]
@@ -199,6 +186,37 @@ export function createEnrichmentEndpoint(options: CorePassPluginOptions) {
 				throw new APIError('NOT_FOUND', { message: 'Passkey not found for credentialId' });
 			}
 			const userId = (passkey as { userId: string }).userId;
+
+			const data = (userData ?? {}) as EnrichmentUserData;
+			const failAndClean = async (err: APIError) => {
+				const internal = ctx.context.internalAdapter as { deleteUser: (id: string) => Promise<unknown>; deleteSessions: (userId: string) => Promise<unknown> };
+				try {
+					await internal.deleteSessions(userId);
+					await internal.deleteUser(userId);
+				} catch (e) {
+					ctx.context.logger?.error?.('Failed to clean account after enrichment validation failure', e);
+				}
+				throw err;
+			};
+
+			if (!coreId?.trim()) {
+				await failAndClean(new APIError('BAD_REQUEST', { message: 'coreId is required and must be non-empty' }));
+			}
+			if (options.requireO18y && !toBool(data.o18y)) {
+				await failAndClean(new APIError('BAD_REQUEST', { message: 'requireO18y: o18y must be true' }));
+			}
+			if (options.requireO21y && !toBool(data.o21y)) {
+				await failAndClean(new APIError('BAD_REQUEST', { message: 'requireO21y: o21y must be true' }));
+			}
+			if (options.requireKyc && !toBool(data.kyc)) {
+				await failAndClean(new APIError('BAD_REQUEST', { message: 'requireKyc: kyc must be true' }));
+			}
+			if (options.requireEmail) {
+				const email = typeof data.email === 'string' ? data.email.trim() : '';
+				if (!email) {
+					await failAndClean(new APIError('BAD_REQUEST', { message: 'requireEmail: email is required' }));
+				}
+			}
 
 			const coreIdUpper = coreId.trim().toUpperCase();
 			const email = typeof data.email === 'string' && data.email.trim() ? data.email.trim() : null;
