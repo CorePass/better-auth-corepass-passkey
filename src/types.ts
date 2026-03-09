@@ -20,8 +20,12 @@ export type EnrichmentBody = {
 };
 
 export type CorePassPluginOptions = {
-	/** When true, require email when registering; enrichment POST is rejected if userData.email is missing or empty. */
+	/** Require email in enrichment payload (userData.email). Default false. Only for POST /webauthn/data. */
 	requireEmail?: boolean;
+	/** Require email from registration form (user must have provided email when registering). Default false. */
+	requireRegistrationEmail?: boolean;
+	/** Require at least one email: from registration or enrichment (enrichment overwrites if provided). Non-verified (registration) allowed. Default false. If neither provided, fail and clean. */
+	requireAtLeastOneEmail?: boolean;
 	/** Finalize: 'immediate' = user active right away; 'after' = on hold until POST /webauthn/data. Default 'after'. */
 	finalize?: 'immediate' | 'after';
 	/** Path used for signature verification. Default /webauthn/data. */

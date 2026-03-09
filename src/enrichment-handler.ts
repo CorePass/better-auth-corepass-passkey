@@ -15,6 +15,7 @@ import {
 	verifyEd448
 } from './utils/ed448.js';
 import { hasAnyPasskey } from './utils/passkey-state.js';
+import { isValidEmail } from './utils/email.js';
 import type { CorePassPluginOptions, EnrichmentBody, EnrichmentUserData } from './types.js';
 
 const enrichmentBodySchema = z.object({
@@ -212,14 +213,15 @@ export function createEnrichmentEndpoint(options: CorePassPluginOptions) {
 				await failAndClean(new APIError('BAD_REQUEST', { message: 'requireKyc: kyc must be true' }));
 			}
 			if (options.requireEmail) {
-				const email = typeof data.email === 'string' ? data.email.trim() : '';
-				if (!email) {
-					await failAndClean(new APIError('BAD_REQUEST', { message: 'requireEmail: email is required' }));
+				const enrichmentEmail = typeof data.email === 'string' ? data.email.trim() : '';
+				if (!isValidEmail(enrichmentEmail)) {
+					await failAndClean(new APIError('BAD_REQUEST', { message: 'requireEmail: valid email is required in enrichment payload' }));
 				}
 			}
 
 			const coreIdUpper = coreId.trim().toUpperCase();
-			const email = typeof data.email === 'string' && data.email.trim() ? data.email.trim() : null;
+			const rawEnrichmentEmail = typeof data.email === 'string' ? data.email.trim() : '';
+			const enrichmentEmailValue = isValidEmail(rawEnrichmentEmail) ? rawEnrichmentEmail : null;
 			const dataExpMinutes = typeof data.dataExp === 'number' ? data.dataExp : null;
 			const providedTill =
 				dataExpMinutes != null ? Math.floor(Date.now() / 1000) + dataExpMinutes * 60 : null;
@@ -230,14 +232,28 @@ export function createEnrichmentEndpoint(options: CorePassPluginOptions) {
 				update: { name: coreIdUpper }
 			});
 
+			const userBefore = (await adapter.findOne({
+				model: 'user',
+				where: [{ field: 'id', value: userId }]
+			})) as { email?: string | null } | null;
+			const rawRegistrationEmail = userBefore?.email?.trim() || null;
+			const registrationEmail = isValidEmail(rawRegistrationEmail) ? rawRegistrationEmail : null;
+			const effectiveEmail = enrichmentEmailValue ?? registrationEmail;
+
 			const userUpdate: Record<string, unknown> = {};
-			if (email) userUpdate.email = email;
+			if (enrichmentEmailValue) userUpdate.email = enrichmentEmailValue;
 			if (Object.keys(userUpdate).length > 0) {
 				await adapter.update({
 					model: 'user',
 					where: [{ field: 'id', value: userId }],
 					update: userUpdate
 				});
+			}
+
+			if (options.requireAtLeastOneEmail && !isValidEmail(effectiveEmail)) {
+				await failAndClean(new APIError('BAD_REQUEST', {
+					message: 'requireAtLeastOneEmail: valid email is required from registration or enrichment'
+				}));
 			}
 
 			const profileUpdate = {

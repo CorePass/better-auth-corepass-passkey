@@ -14,6 +14,7 @@ import {
 } from './enrichment-handler.js';
 import type { CorePassPluginOptions } from './types.js';
 import { hasAnyPasskey, isAllowedBeforePasskey } from './utils/passkey-state.js';
+import { isValidEmail } from './utils/email.js';
 
 function normalizeAaguid(value: string): string {
 	return String(value).toLowerCase().replace(/\s+/g, '').trim();
@@ -74,6 +75,11 @@ const REGISTRATION_TIMEOUT_ERROR = {
 	code: 'REGISTRATION_TIMEOUT' as const
 };
 
+const EMAIL_REQUIRED_ERROR = {
+	message: 'Email is required from registration or enrichment.',
+	code: 'EMAIL_REQUIRED' as const
+};
+
 export function corepassPasskey(options: CorePassPluginOptions = {}) {
 	const allowedAaguids = options.allowedAaguids;
 	const hasAllowlist =
@@ -98,6 +104,18 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 						const adapter = ctx.context.adapter as { findOne: (arg: { model: string; where: { field: string; value: unknown }[] }) => Promise<unknown> };
 						const hasPasskey = await hasAnyPasskey(adapter, session.user.id);
 						if (hasPasskey) {
+							const needEmail = options.requireRegistrationEmail || options.requireAtLeastOneEmail;
+							const userEmail = (session.user as { email?: string | null }).email;
+							if (needEmail && !isValidEmail(userEmail)) {
+								const internal = ctx.context.internalAdapter as { deleteUser: (id: string) => Promise<unknown>; deleteSessions: (userId: string) => Promise<unknown> };
+								try {
+									await internal.deleteSessions(session.user.id);
+									await internal.deleteUser(session.user.id);
+								} catch (err) {
+									ctx.context.logger?.error?.('Failed to clean account: email required', err);
+								}
+								throw new APIError('FORBIDDEN', EMAIL_REQUIRED_ERROR);
+							}
 							return;
 						}
 						const path = (ctx as { path?: string }).path ?? '/';
@@ -160,7 +178,8 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 		},
 		$ERROR_CODES: {
 			PASSKEY_REQUIRED: PASSKEY_REQUIRED_ERROR,
-			REGISTRATION_TIMEOUT: REGISTRATION_TIMEOUT_ERROR
+			REGISTRATION_TIMEOUT: REGISTRATION_TIMEOUT_ERROR,
+			EMAIL_REQUIRED: EMAIL_REQUIRED_ERROR
 		}
 	};
 }

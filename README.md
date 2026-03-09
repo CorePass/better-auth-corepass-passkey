@@ -6,7 +6,7 @@ Use this plugin **after** the passkey plugin. It registers the `corepass_profile
 
 ## Flow overview
 
-1. **Registration** – User starts passkey registration via Better Auth (passkey plugin). Email is optional or required depending on `requireEmail`.
+1. **Registration** – User starts passkey registration via Better Auth (passkey plugin). Email can be required at registration (`requireRegistrationEmail`), in enrichment only (`requireEmail`), or at least one of the two (`requireAtLeastOneEmail`). All default false.
 2. **Finalize** – With `finalize: 'immediate'` the user is active right away. With `finalize: 'after'` (default) the user stays on hold until enrichment is received.
 3. **Enrichment** – The CorePass app sends a signed payload to **POST** `{basePath}/webauthn/data` (e.g. `/api/auth/webauthn/data`). The plugin verifies the Ed448 signature over canonical JSON, then:
    - Finds the passkey by `credentialId`, loads the linked user
@@ -91,7 +91,7 @@ All are under your Better Auth `basePath` (e.g. `/api/auth`).
 - `signaturePath` defaults to `/webauthn/data` (configurable via `signaturePath`).
 - `canonicalJsonBody`: object keys sorted alphabetically, JSON stringified with no extra whitespace.
 
-**userData** (all optional): `email`, `o18y`, `o21y`, `kyc`, `kycDoc`, `dataExp` (minutes → stored as `providedTill`). If `requireO18y` / `requireO21y` / `requireKyc` are set, the plugin rejects the request when the corresponding flag is not `true`. After signature verification, if data is invalid (e.g. missing or empty `coreId`) or any required check (o18y, o21y, kyc, email) fails, the plugin **deletes that user and their sessions** and then returns an error, so the account cannot be used without valid enrichment.
+**userData** (all optional): `email`, `o18y`, `o21y`, `kyc`, `kycDoc`, `dataExp` (minutes → stored as `providedTill`). Email: validated with regex (`local@domain.tld`, max 254 chars). Use `requireEmail` to require it in the payload only; `requireRegistrationEmail` to require the form email at registration; `requireAtLeastOneEmail` to require email from registration or enrichment (enrichment overwrites; non-verified registration email allowed). If `requireO18y` / `requireO21y` / `requireKyc` are set, the plugin rejects when the flag is not `true`. After signature verification, if data is invalid or any required check fails, the plugin **deletes that user and their sessions** and then returns an error.
 
 ## Installation and setup
 
@@ -161,10 +161,12 @@ All are under your Better Auth `basePath` (e.g. `/api/auth`).
 | `finalize` | `'immediate' \| 'after'` | `'after'` | When the user becomes active: `'immediate'` right after passkey registration; `'after'` when enrichment is received. |
 | `signaturePath` | `string` | `'/webauthn/data'` | Path used when building the signature input string. |
 | `timestampWindowMs` | `number` | `600_000` | Allowed clock skew for `timestamp` (microseconds). |
-| `requireEmail` | `boolean` | — | Require email when registering; enrichment POST is rejected if userData.email is missing or empty. On failure (after signature verification), the user and sessions are deleted. |
-| `requireO18y` | `boolean` | — | Reject enrichment if `userData.o18y` is not true. On failure (after signature verification), the user and sessions are deleted. |
-| `requireO21y` | `boolean` | — | Reject enrichment if `userData.o21y` is not true. On failure (after signature verification), the user and sessions are deleted. |
-| `requireKyc` | `boolean` | — | Reject enrichment if `userData.kyc` is not true. On failure (after signature verification), the user and sessions are deleted. |
+| `requireEmail` | `boolean` | `false` | Require email **in enrichment payload only** (userData.email in POST /webauthn/data). On failure after signature verification, user and sessions are deleted. |
+| `requireRegistrationEmail` | `boolean` | `false` | Require email from the registration form (user must have provided email when registering). If missing when they have a passkey, account is cleaned and **403** `EMAIL_REQUIRED`. |
+| `requireAtLeastOneEmail` | `boolean` | `false` | Require email from registration or enrichment (enrichment overwrites if provided). Non-verified (registration) allowed. If neither provided, fail and clean (enrichment) or **403** and clean (access). |
+| `requireO18y` | `boolean` | `false` | Reject enrichment if `userData.o18y` is not true. On failure (after signature verification), the user and sessions are deleted. |
+| `requireO21y` | `boolean` | `false` | Reject enrichment if `userData.o21y` is not true. On failure (after signature verification), the user and sessions are deleted. |
+| `requireKyc` | `boolean` | `false` | Reject enrichment if `userData.kyc` is not true. On failure (after signature verification), the user and sessions are deleted. |
 | `allowedAaguids` | `string \| string[] \| false` | — | AAGUID allowlist for passkey registration. When set (string or non-empty array), only these authenticator AAGUIDs are accepted (enforced via passkey `create.before` DB hook). Use `false` or omit to allow any. |
 | `allowRoutesBeforePasskey` | `string[]` | `[]` | No extra routes by default. Only public behaviour applies: safe methods (GET, HEAD, OPTIONS) and passkey registration routes. Add paths only if you need more. |
 | `allowMethodsBeforePasskey` | `string[]` | `['GET', 'HEAD', 'OPTIONS']` | HTTP methods always allowed before first passkey (e.g. session fetch). |
