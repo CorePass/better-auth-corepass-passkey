@@ -1,6 +1,6 @@
 /**
  * Better Auth plugin: CorePass enrichment for passkey.
- * Adds POST /webauthn/data for signed enrichment payload, corepass_profile schema, requireO18y/requireO21y/requireKyc.
+ * Adds POST /passkey/data for signed enrichment payload, corepass_profile schema, requireO18y/requireO21y/requireKyc.
  * Optional allowedAaguids: passkey create.before hook to allow only listed AAGUIDs.
  * Users without a passkey are blocked from auth endpoints except public behaviour (safe methods + passkey registration).
  * Must be used after @better-auth/passkey.
