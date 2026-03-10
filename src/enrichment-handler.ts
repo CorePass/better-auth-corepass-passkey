@@ -1,5 +1,5 @@
 /**
- * webauthn/data endpoints:
+ * passkey/data endpoints:
  * - HEAD: 200 if enrichment is available (finalize "after"), 404 if not (e.g. "immediate").
  * - GET: session required; returns corepass_profile for current user only if providedTill is not set or providedTill >= now; 410 Gone if expired (portal cannot get data).
  * - POST: verify Ed448 signature, validate requireEmail/requireO18y/requireO21y/requireKyc and coreId; on any validation failure after signature verification, delete that user and sessions then throw. On success, store enrichment, update user email and name (name = first 4 + "…" + last 4 of Core ID, uppercase), update passkey name to Core ID (uppercased).
@@ -36,7 +36,7 @@ const enrichmentBodySchema = z.object({
 		.optional()
 });
 
-const DEFAULT_SIGNATURE_PATH = '/webauthn/data';
+const DEFAULT_ENRICHMENT_PATH = '/passkey/data';
 const DEFAULT_TIMESTAMP_WINDOW_MS = 600_000;
 
 function toBool(v: boolean | number | undefined): boolean {
@@ -53,11 +53,11 @@ function coreIdToDisplayName(coreId: string): string {
 	return `${first4}…${last4}`;
 }
 
-/** HEAD /webauthn/data: 200 if enrichment flow is available (finalize "after"), 404 if immediate. */
+/** HEAD /passkey/data: 200 if enrichment flow is available (finalize "after"), 404 if immediate. */
 export function createHeadEnrichmentEndpoint(options: CorePassPluginOptions) {
 	const finalize = options.finalize ?? 'after';
 	return createAuthEndpoint(
-		'/webauthn/data',
+		DEFAULT_ENRICHMENT_PATH,
 		{
 			method: 'HEAD',
 			metadata: {
@@ -75,10 +75,10 @@ export function createHeadEnrichmentEndpoint(options: CorePassPluginOptions) {
 	);
 }
 
-/** GET /webauthn/data: session required; returns profile only if providedTill is unset or not expired; 410 if expired. */
+/** GET /passkey/data: session required; returns profile only if providedTill is unset or not expired; 410 if expired. */
 export function createGetEnrichmentEndpoint(options: CorePassPluginOptions) {
 	return createAuthEndpoint(
-		'/webauthn/data',
+		DEFAULT_ENRICHMENT_PATH,
 		{
 			method: 'GET',
 			use: [sessionMiddleware],
@@ -127,11 +127,11 @@ export function createGetEnrichmentEndpoint(options: CorePassPluginOptions) {
 }
 
 export function createEnrichmentEndpoint(options: CorePassPluginOptions) {
-	const signaturePath = options.signaturePath ?? DEFAULT_SIGNATURE_PATH;
+	const signaturePath = options.signaturePath ?? DEFAULT_ENRICHMENT_PATH;
 	const timestampWindowMs = options.timestampWindowMs ?? DEFAULT_TIMESTAMP_WINDOW_MS;
 
 	return createAuthEndpoint(
-		'/webauthn/data',
+		DEFAULT_ENRICHMENT_PATH,
 		{
 			method: 'POST',
 			body: enrichmentBodySchema,
