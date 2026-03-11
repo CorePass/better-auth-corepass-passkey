@@ -165,8 +165,16 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 							return;
 						}
 						if (method.toUpperCase() === 'POST' && pathNorm === RESTART_REGISTRATION_PATH) {
-							const internal = ctx.context.internalAdapter as { deleteUser: (id: string) => Promise<unknown>; deleteSessions: (userId: string) => Promise<unknown> };
+							const internal = ctx.context.internalAdapter as {
+								deleteUser: (id: string) => Promise<unknown>;
+								deleteSessions: (userId: string) => Promise<unknown>;
+								deleteSession?: (token: string) => Promise<unknown>;
+							};
 							try {
+								const token = (session.session as { token?: string })?.token;
+								if (token && typeof internal.deleteSession === 'function') {
+									await internal.deleteSession(token);
+								}
 								await internal.deleteSessions(session.user.id);
 								await internal.deleteUser(session.user.id);
 							} catch (err) {
