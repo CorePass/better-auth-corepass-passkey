@@ -165,6 +165,8 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 							} catch (err) {
 								ctx.context.logger?.error?.('Failed to delete user for registration restart', err);
 							}
+							// Clear cached session so the anonymous plugin's handler does a fresh lookup and gets null, allowing a new anonymous sign-in.
+							(ctx as { context: { session?: unknown } }).context.session = undefined;
 							return;
 						}
 						if (isAllowedBeforePasskey(path, method, gateOptions)) {
