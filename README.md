@@ -2,7 +2,7 @@
 
 Better Auth plugin that adds **CorePass enrichment** on top of [@better-auth/passkey](https://better-auth.com/docs/plugins/passkey): signed identity and profile data (Core ID, email, age/kyc flags) sent from the CorePass app after passkey registration, with Ed448 signature verification and optional gating (requireO18y, requireO21y, requireKyc).
 
-Use this plugin **after** the passkey plugin. It registers the `corepass_profile` schema and endpoints under your auth base path: **HEAD**, **GET**, **POST** `/passkey/data`, .
+Use this plugin **after** the passkey plugin. It registers the `corepass_profile` schema and endpoints under your auth base path: **HEAD** and **POST** `/passkey/data` only.
 
 ## Flow overview
 
@@ -15,7 +15,7 @@ Use this plugin **after** the passkey plugin. It registers the `corepass_profile
    - Updates user email when provided (enrichment overwrites any form/placeholder email), and user name from Core ID (first 4 + "…" + last 4 chars, uppercase)
    - Upserts `corepass_profile` (coreId, o18y, o21y, kyc, kycDoc, `providedTill` from `dataExp` in minutes)
    - Sets the passkey’s display name to Core ID (uppercased)
-4. **Data expiry** – If `userData.dataExp` (minutes) is set, the plugin stores `providedTill = now + dataExp * 60`. **GET** `/passkey/data` returns the profile only while `providedTill >= now`; after that it returns **410 Gone** so the portal cannot read the data.
+4. **Data expiry** – If `userData.dataExp` (minutes) is set, the plugin stores `providedTill = now + dataExp * 60` in the profile (used server-side; no GET on `/passkey/data`).
 
 ### Strict “passkey-only access” (anonymous bootstrap)
 
@@ -62,12 +62,6 @@ sequenceDiagram
     BetterAuth->>CorePass: 200 OK
 
     User->>Portal: Use app (session)
-    Portal->>BetterAuth: GET {basePath}/passkey/data (session)
-    alt providedTill unset or not expired
-        BetterAuth->>Portal: 200 + profile
-    else providedTill expired
-        BetterAuth->>Portal: 410 Gone (portal cannot get data)
-    end
 ```
 
 ## Endpoints
@@ -76,9 +70,8 @@ Path is **`/passkey/data`**. The **plugin owns this route**: in your app’s han
 
 | Method | Path | Description |
 | --- | --- | --- |
-| **HEAD** | `/passkey/data` | **200** if enrichment is available (`finalize: 'after'`), **404** if not (`finalize: 'immediate'`). Use to detect whether the app should send enrichment. |
-| **GET** | `/passkey/data` | Requires session. Returns current user’s CorePass profile plus `hasPasskey` and `finalized`. **410 Gone** if `providedTill` has passed. |
-| **POST** | `/passkey/data` | CorePass enrichment: body + `X-Signature` (Ed448). Verifies signature, applies options, stores profile, updates user email and passkey name. |
+| **HEAD** | `/passkey/data` | **Only method to verify if the endpoint is active.** **200** if enrichment flow is available (`finalize: 'after'`), **404** if not (`finalize: 'immediate'`). Use to detect whether the CorePass app should send enrichment. Do not use GET for this. |
+| **POST** | `/passkey/data` | **Receive data from the application (CorePass) for verification.** Body + `X-Signature` (Ed448). Verifies signature, applies options, stores profile, updates user email and passkey name. |
 
 ## POST /passkey/data: payload and signature
 
@@ -186,7 +179,7 @@ Only **anonymous registration** can be restarted: when a user with no passkey PO
 | --- | --- | --- |
 | `/sign-in/anonymous` | POST | **Restart registration** (anonymous only): delete current user/sessions so handler can create a new one. |
 | `/passkey/generate-register-options`, `/passkey/verify-registration` | POST | Allowed before passkey (passkey plugin). |
-| `/passkey/data` | HEAD, GET, POST | Plugin enrichment endpoint (POST requires passkey after registration). |
+| `/passkey/data` | HEAD, POST | HEAD = verify if active; POST = receive data from application (CorePass) for verification. |
 | `/get-session` | GET | Allowed (safe method). |
 
 Other paths (e.g. `/sign-up/email`, `/sign-in/email`, OAuth callbacks, `/sign-out`) are not restarted; if the user has no passkey they are blocked (or timeout) and the client should show "wait for expiration and retry" where applicable.
@@ -240,8 +233,8 @@ Minimal cases to verify the strict passkey-only flow:
 3. **After passkey registration → protected route allowed**
    With the same user now having one passkey, call the previously blocked endpoint. Expect **200** (or normal response).
 
-4. **After enrichment → GET /passkey/data**
-   With session and passkey, call GET `/passkey/data`. Expect **200** and JSON including `hasPasskey: true`, `finalized: true`, and profile fields when not expired.
+4. **Verify /passkey/data active → HEAD /passkey/data**
+   Call HEAD `/passkey/data`. With `finalize: 'after'` expect **200**; with `finalize: 'immediate'` expect **404**. Do not use GET for this.
 
 ## References
 

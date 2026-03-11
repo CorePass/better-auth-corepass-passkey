@@ -1,11 +1,13 @@
 /**
  * Serves the enrichment endpoint at exactly /passkey/data (no base path).
- * When the request path is /passkey/data, rewrites the URL to {basePath}/passkey/data
- * and forwards to the auth handler. Use this in your app's handle/hooks so the plugin
- * owns the route; the app only calls this and returns the response when non-null.
+ * Only HEAD (verify if active) and POST (receive data from application for verification) are allowed.
+ * When the request path is /passkey/data and method is HEAD or POST, rewrites URL to {basePath}/passkey/data
+ * and forwards to the auth handler. GET returns 405 Method Not Allowed.
  */
 
 export const PASSKEY_DATA_PATH = '/passkey/data';
+
+const ALLOWED_METHODS = new Set(['HEAD', 'POST']);
 
 export type HandlePasskeyDataRouteOptions = {
 	/** Better Auth handler (e.g. auth.handler). */
@@ -15,9 +17,8 @@ export type HandlePasskeyDataRouteOptions = {
 };
 
 /**
- * If the request is for GET/HEAD/POST /passkey/data, rewrites URL to {basePath}/passkey/data,
- * calls the auth handler, and returns the response. Otherwise returns null.
- * Use in your SvelteKit (or other) handle: if (await handlePasskeyDataRoute(request, opts)) return that response.
+ * If the request is for HEAD or POST /passkey/data, rewrites URL to {basePath}/passkey/data,
+ * calls the auth handler, and returns the response. GET returns 405. Other paths return null.
  */
 export async function handlePasskeyDataRoute(
 	request: Request,
@@ -26,6 +27,11 @@ export async function handlePasskeyDataRoute(
 	const pathname = new URL(request.url).pathname.replace(/\/+$/, '') || '/';
 	if (pathname !== PASSKEY_DATA_PATH) return null;
 
+	const method = request.method.toUpperCase();
+	if (!ALLOWED_METHODS.has(method)) {
+		return new Response(null, { status: 405, headers: { Allow: 'HEAD, POST' } });
+	}
+
 	const base = (options.basePath ?? '').replace(/\/+$/, '') || '';
 	const rewrittenPath = base ? `${base}${PASSKEY_DATA_PATH}` : PASSKEY_DATA_PATH;
 	const url = new URL(request.url);
@@ -33,7 +39,7 @@ export async function handlePasskeyDataRoute(
 	const rewrittenRequest = new Request(url, {
 		method: request.method,
 		headers: request.headers,
-		body: request.method !== 'GET' && request.method !== 'HEAD' ? request.body : undefined
+		body: method === 'POST' ? request.body : undefined
 	});
 	return options.handler(rewrittenRequest);
 }

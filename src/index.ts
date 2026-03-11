@@ -9,11 +9,7 @@
 import type { AuthContext } from 'better-auth';
 import { APIError, createAuthMiddleware, getSessionFromCtx } from 'better-auth/api';
 import { deleteSessionCookie } from 'better-auth/cookies';
-import {
-	createEnrichmentEndpoint,
-	createGetEnrichmentEndpoint,
-	createHeadEnrichmentEndpoint
-} from './enrichment-handler.js';
+import { createEnrichmentEndpoint, createHeadEnrichmentEndpoint } from './enrichment-handler.js';
 import type { CorePassPluginOptions } from './types.js';
 import { hasAnyPasskey, isAllowedBeforePasskey } from './utils/passkey-state.js';
 import { isValidEmail } from './utils/email.js';
@@ -296,7 +292,6 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 		hooks: { before: [beforeHook], after: [afterHook] },
 		endpoints: {
 			passkeyDataHead: createHeadEnrichmentEndpoint(options),
-			passkeyDataGet: createGetEnrichmentEndpoint(options),
 			passkeyData: createEnrichmentEndpoint(options)
 		},
 		$ERROR_CODES: {

@@ -1,12 +1,11 @@
 /**
  * passkey/data endpoints:
- * - HEAD: 200 if enrichment is available (finalize "after"), 404 if not (e.g. "immediate").
- * - GET: session required; returns corepass_profile for current user only if providedTill is not set or providedTill >= now; 410 Gone if expired (portal cannot get data).
- * - POST: verify Ed448 signature, validate requireEmail/requireO18y/requireO21y/requireKyc and coreId; on any validation failure after signature verification, delete that user and sessions then throw. On success, store enrichment, update user email and name (name = first 4 + "…" + last 4 of Core ID, uppercase), update passkey name to Core ID (uppercased).
+ * - HEAD: only method to verify if /passkey/data is active. 200 if enrichment flow is available (finalize "after"), 404 if not (e.g. "immediate").
+ * - POST: receive data from the application (CorePass) for verification. Ed448 signature, requireEmail/requireO18y/requireO21y/requireKyc and coreId; on failure delete user and sessions. On success store enrichment, update user email and name, passkey name.
  */
 
 import { validateWalletAddress } from 'blockchain-wallet-validator';
-import { createAuthEndpoint, APIError, getSessionFromCtx, sessionMiddleware } from 'better-auth/api';
+import { createAuthEndpoint, APIError } from 'better-auth/api';
 import { z } from 'zod';
 import { canonicalizeJSON, buildSignatureInput } from './utils/canonical.js';
 import {
@@ -15,7 +14,6 @@ import {
 	publicKeyFromCoreIdLongForm,
 	verifyEd448
 } from './utils/ed448.js';
-import { hasAnyPasskey } from './utils/passkey-state.js';
 import { isValidEmail } from './utils/email.js';
 import type { CorePassPluginOptions, EnrichmentBody, EnrichmentUserData } from './types.js';
 
@@ -71,57 +69,6 @@ export function createHeadEnrichmentEndpoint(options: CorePassPluginOptions) {
 				return new Response(null, { status: 200 });
 			}
 			return new Response(null, { status: 404 });
-		}
-	);
-}
-
-/** GET /passkey/data: session required; returns profile only if providedTill is unset or not expired; 410 if expired. */
-export function createGetEnrichmentEndpoint(options: CorePassPluginOptions) {
-	return createAuthEndpoint(
-		DEFAULT_ENRICHMENT_PATH,
-		{
-			method: 'GET',
-			use: [sessionMiddleware],
-			metadata: {
-				openapi: {
-					description: 'Get current user CorePass profile; 410 Gone if providedTill has expired'
-				}
-			}
-		},
-		async (ctx) => {
-			const session = await getSessionFromCtx(ctx);
-			if (!session?.user?.id) {
-				throw new APIError('UNAUTHORIZED', { message: 'Session required' });
-			}
-			const adapter = ctx.context.adapter as Adapter;
-			const hasPasskey = await hasAnyPasskey(adapter, session.user.id);
-			const profile = await adapter.findOne({
-				model: 'corepass_profile',
-				where: [{ field: 'userId', value: session.user.id }]
-			});
-			if (!profile) {
-				return new Response(null, { status: 404 });
-			}
-			const row = profile as { userId: string; coreId: string; o18y: number; o21y: number; kyc: number; kycDoc: string | null; backedUp: number | null; providedTill: number | null };
-			const now = Math.floor(Date.now() / 1000);
-			if (row.providedTill != null && row.providedTill < now) {
-				return new Response(JSON.stringify({ error: 'Enrichment data expired', code: 'PROVIDED_TILL_EXPIRED', hasPasskey, finalized: hasPasskey }), {
-					status: 410,
-					headers: { 'Content-Type': 'application/json' }
-				});
-			}
-			return ctx.json({
-				userId: row.userId,
-				coreId: row.coreId,
-				o18y: !!row.o18y,
-				o21y: !!row.o21y,
-				kyc: !!row.kyc,
-				kycDoc: row.kycDoc,
-				backedUp: !!row.backedUp,
-				providedTill: row.providedTill,
-				hasPasskey,
-				finalized: true
-			});
 		}
 	);
 }
