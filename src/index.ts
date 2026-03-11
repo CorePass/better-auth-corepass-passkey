@@ -6,6 +6,7 @@
  * Must be used after @better-auth/passkey.
  */
 
+import type { AuthContext } from 'better-auth';
 import { APIError, createAuthMiddleware, getSessionFromCtx } from 'better-auth/api';
 import {
 	createEnrichmentEndpoint,
@@ -223,22 +224,19 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 
 	const algIds = options.supportedAlgorithmIDs === false ? null : (options.supportedAlgorithmIDs ?? EXPANDED_SUPPORTED_ALGORITHM_IDS);
 
-	async function onResponse(
-		res: Response,
-		_ctx: { request?: Request; path?: string; context?: { options?: { basePath?: string } } }
-	): Promise<{ response: Response } | undefined> {
-		if (algIds === null) return undefined;
+	async function onResponse(res: Response, _ctx: AuthContext): Promise<{ response: Response } | void> {
+		if (algIds === null) return;
 		const ct = res.headers.get('content-type') ?? '';
-		if (!ct.includes('application/json')) return undefined;
+		if (!ct.includes('application/json')) return;
 		let body: unknown;
 		try {
 			body = await res.clone().json();
 		} catch {
-			return undefined;
+			return;
 		}
-		if (body == null || typeof body !== 'object' || !Array.isArray((body as { pubKeyCredParams?: unknown }).pubKeyCredParams)) return undefined;
+		if (body == null || typeof body !== 'object' || !Array.isArray((body as { pubKeyCredParams?: unknown }).pubKeyCredParams)) return;
 		const opts = body as { pubKeyCredParams: { type: string; alg: number }[]; challenge?: string; rp?: unknown };
-		if (!opts.challenge && !opts.rp) return undefined;
+		if (!opts.challenge && !opts.rp) return;
 		opts.pubKeyCredParams = algIds.map((alg) => ({ type: 'public-key' as const, alg }));
 		return {
 			response: new Response(JSON.stringify(body), {
