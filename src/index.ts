@@ -101,6 +101,12 @@ const RESTART_REGISTRATION_PATH = '/sign-in/anonymous';
 /** Default AAGUID for Core Pass authenticator. Use allowedAaguids: false to allow any. */
 const DEFAULT_AAGUID = '636f7265-7061-7373-6964-656e74696679';
 
+/**
+ * Expanded COSE algorithm IDs for pubKeyCredParams, ordered by strongest cryptography first (authenticators often pick the first they support).
+ * -53 Ed448, -19 Ed25519, -8 EdDSA (generic), -36 ES512, -7 ES256, -39..-37 RSA-PSS, -259..-257 RSA-PKCS1; excludes -65535 (SHA-1).
+ */
+const EXPANDED_SUPPORTED_ALGORITHM_IDS = [-53, -19, -8, -36, -7, -39, -38, -37, -259, -258, -257];
+
 export function corepassPasskey(options: CorePassPluginOptions = {}) {
 	const raw = options.allowedAaguids;
 	const effectiveAllowlist: string | string[] | null =
@@ -215,9 +221,38 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 		})
 	};
 
+	const algIds = options.supportedAlgorithmIDs === false ? null : (options.supportedAlgorithmIDs ?? EXPANDED_SUPPORTED_ALGORITHM_IDS);
+
+	async function onResponse(
+		res: Response,
+		_ctx: { request?: Request; path?: string; context?: { options?: { basePath?: string } } }
+	): Promise<{ response: Response } | undefined> {
+		if (algIds === null) return undefined;
+		const ct = res.headers.get('content-type') ?? '';
+		if (!ct.includes('application/json')) return undefined;
+		let body: unknown;
+		try {
+			body = await res.clone().json();
+		} catch {
+			return undefined;
+		}
+		if (body == null || typeof body !== 'object' || !Array.isArray((body as { pubKeyCredParams?: unknown }).pubKeyCredParams)) return undefined;
+		const opts = body as { pubKeyCredParams: { type: string; alg: number }[]; challenge?: string; rp?: unknown };
+		if (!opts.challenge && !opts.rp) return undefined;
+		opts.pubKeyCredParams = algIds.map((alg) => ({ type: 'public-key' as const, alg }));
+		return {
+			response: new Response(JSON.stringify(body), {
+				status: res.status,
+				statusText: res.statusText,
+				headers: res.headers
+			})
+		};
+	}
+
 	return {
 		id: 'corepass-passkey',
 		schema: corepassPasskeySchema,
+		onResponse,
 		init() {
 			const opts: { options?: { databaseHooks?: Record<string, unknown> } } = {};
 			if (hasAllowlist) {

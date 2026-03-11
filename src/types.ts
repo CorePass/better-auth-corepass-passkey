@@ -48,6 +48,17 @@ export type CorePassPluginOptions = {
 	/** When true, require userData.backedUp to be present and true in enrichment (CorePass backed up). Default false. */
 	allowOnlyBackedUp?: boolean;
 	/**
+	 * COSE algorithm IDs for passkey registration (pubKeyCredParams). When set, the plugin rewrites registration options to use these so more authenticators are supported.
+	 * Ordered by strongest cryptography first; authenticators often pick the first they support.
+	 * Default list (set to false to leave @better-auth/passkey defaults unchanged):
+	 * -53 Ed448 (EdDSA, strongest), -19 Ed25519 (EdDSA), -8 EdDSA (generic),
+	 * -36 ES512 (ECDSA/SHA-512), -7 ES256 (ECDSA/SHA-256),
+	 * -39 RSASSA-PSS/SHA-512, -38 RSASSA-PSS/SHA-384, -37 RSASSA-PSS/SHA-256,
+	 * -259 RSASSA-PKCS1-v1_5/SHA-512, -258 RSASSA-PKCS1-v1_5/SHA-384, -257 RSASSA-PKCS1-v1_5/SHA-256.
+	 * Excluded: -65535 (RSA-PKCS1-v1_5/SHA-1, deprecated).
+	 */
+	supportedAlgorithmIDs?: number[] | false;
+	/**
 	 * AAGUID allowlist for passkey registration. Only these authenticator AAGUIDs are accepted.
 	 * Default: Core Pass AAGUID `636f7265-7061-7373-6964-656e74696679`. Use string (one), string[] (many), or false to allow any.
 	 * Applied via passkey create.before database hook.
