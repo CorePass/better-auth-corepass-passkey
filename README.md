@@ -8,7 +8,7 @@ Use this plugin **after** the passkey plugin. It registers the `corepass_profile
 
 1. **Registration** – User starts passkey registration via Better Auth (passkey plugin). Email can come from a **form** (request body of `POST /sign-in/anonymous`, e.g. `signIn.anonymous({ email })`) and/or from **enrichment** later; enrichment overwrites when provided. If `requireRegistrationEmail` is true, a valid email is required in the request body **before** the account is created (otherwise the request is rejected). If `requireEmail` is true, email is required from enrichment only. If `requireAtLeastOneEmail` is true, email must be provided from at least one source. All emails are validated by regex. Default for all three is false.
 2. **Finalize** – With `finalize: 'immediate'` the user is active right away. With `finalize: 'after'` (default) the user stays on hold until enrichment is received.
-3. **Enrichment** – The CorePass app sends a signed payload to **POST** `{basePath}/passkey/data` (default `/auth/passkey/data`). The plugin verifies the Ed448 signature over canonical JSON, then:
+3. **Enrichment** – The CorePass app sends a signed payload to **POST** `{basePath}/passkey/data` (path `/passkey/data`; full path e.g. `/auth/passkey/data` when basePath is `/auth`). The plugin verifies the Ed448 signature over canonical JSON, then:
    - Finds the passkey by `credentialId`, loads the linked user
    - Validates Core ID (ICAN) with [blockchain-wallet-validator](https://github.com/sergical/blockchain-wallet-validator) (Core/ICAN); if invalid or network not in `allowNetwork`, user and sessions are deleted and an error is returned
    - Enforces `requireO18y` / `requireO21y` / `requireKyc` from `userData` if set
@@ -55,14 +55,14 @@ sequenceDiagram
 
     CorePass->>CorePass: User completes identity in CorePass
     CorePass->>CorePass: Sign payload (Ed448, canonical JSON)
-    CorePass->>BetterAuth: POST /auth/passkey/data (body + X-Signature, optional X-Public-Key)
+    CorePass->>BetterAuth: POST {basePath}/passkey/data (body + X-Signature, optional X-Public-Key)
     BetterAuth->>BetterAuth: Verify signature, validate timestamp
     BetterAuth->>BetterAuth: Check requireO18y / requireO21y / requireKyc
     BetterAuth->>BetterAuth: Update user (email), upsert corepass_profile, set passkey name = Core ID
     BetterAuth->>CorePass: 200 OK
 
     User->>Portal: Use app (session)
-    Portal->>BetterAuth: GET /auth/passkey/data (session)
+    Portal->>BetterAuth: GET {basePath}/passkey/data (session)
     alt providedTill unset or not expired
         BetterAuth->>Portal: 200 + profile
     else providedTill expired
@@ -72,13 +72,13 @@ sequenceDiagram
 
 ## Endpoints
 
-All are under your Better Auth `basePath` (default `/auth`). With default basePath, the enrichment endpoint is **`/auth/passkey/data`**.
+Path is **`/passkey/data`**. The **plugin owns this route**: in your app’s handle/hooks call **`handlePasskeyDataRoute(request, { handler: auth.handler, basePath })`** (exported from this package). When the request is for `/passkey/data`, it returns the response (so you return it and skip basePath); otherwise it returns `null` and you continue to your normal handler. Other auth stays under your basePath (e.g. `/auth`). Plugin default basePath is `/api/auth`.
 
-| Method | Path (relative to basePath) | Full path (default) | Description |
-| --- | --- | --- | --- |
-| **HEAD** | `/passkey/data` | `/auth/passkey/data` | **200** if enrichment is available (`finalize: 'after'`), **404** if not (`finalize: 'immediate'`). Use to detect whether the app should send enrichment. |
-| **GET** | `/passkey/data` | `/auth/passkey/data` | Requires session. Returns current user’s CorePass profile plus `hasPasskey` and `finalized`. **410 Gone** if `providedTill` has passed. |
-| **POST** | `/passkey/data` | `/auth/passkey/data` | CorePass enrichment: body + `X-Signature` (Ed448). Verifies signature, applies options, stores profile, updates user email and passkey name. |
+| Method | Path | Description |
+| --- | --- | --- |
+| **HEAD** | `/passkey/data` | **200** if enrichment is available (`finalize: 'after'`), **404** if not (`finalize: 'immediate'`). Use to detect whether the app should send enrichment. |
+| **GET** | `/passkey/data` | Requires session. Returns current user’s CorePass profile plus `hasPasskey` and `finalized`. **410 Gone** if `providedTill` has passed. |
+| **POST** | `/passkey/data` | CorePass enrichment: body + `X-Signature` (Ed448). Verifies signature, applies options, stores profile, updates user email and passkey name. |
 
 ## POST /passkey/data: payload and signature
 

@@ -134,9 +134,13 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 						const path = (ctx as { path?: string }).path ?? '/';
 						const method = (ctx as { method?: string }).method ?? (ctx as { request?: { method?: string } }).request?.method ?? 'GET';
 						const pathNorm = path.replace(/\/+$/, '') || '/';
+						// Normalize path for allow-list: strip auth basePath so path is relative (e.g. /passkey/data, /passkey/verify-authentication). Full path is {basePath}/… from config.
+						const basePath = (ctx.context.options?.basePath ?? '/api/auth').replace(/\/+$/, '') || '/';
+						const pathForAllow =
+							pathNorm === basePath ? '/' : pathNorm.startsWith(basePath + '/') ? pathNorm.slice(basePath.length) || '/' : pathNorm;
 						const session = await getSessionFromCtx(ctx, { disableRefresh: true });
 						if (!session?.user?.id) {
-							if (method.toUpperCase() === 'POST' && pathNorm === RESTART_REGISTRATION_PATH && options.requireRegistrationEmail) {
+							if (method.toUpperCase() === 'POST' && pathForAllow === RESTART_REGISTRATION_PATH && options.requireRegistrationEmail) {
 								const body = (ctx as { body?: { email?: string } }).body ?? {};
 								const email = typeof body.email === 'string' ? body.email.trim() : '';
 								if (!isValidEmail(email)) {
@@ -165,7 +169,7 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 							}
 							return;
 						}
-						if (method.toUpperCase() === 'POST' && pathNorm === RESTART_REGISTRATION_PATH) {
+						if (method.toUpperCase() === 'POST' && pathForAllow === RESTART_REGISTRATION_PATH) {
 							const internal = ctx.context.internalAdapter as {
 								deleteUser: (id: string) => Promise<unknown>;
 								deleteSessions: (userId: string) => Promise<unknown>;
@@ -187,7 +191,7 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 							deleteSessionCookie(ctx);
 							return;
 						}
-						if (isAllowedBeforePasskey(path, method, gateOptions)) {
+						if (isAllowedBeforePasskey(pathForAllow, method, gateOptions)) {
 							return;
 						}
 						if (deleteAfterMs > 0) {
@@ -216,7 +220,10 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 			const path = (ctx as { path?: string }).path ?? '/';
 			const method = (ctx as { method?: string }).method ?? (ctx as { request?: { method?: string } }).request?.method ?? 'GET';
 			const pathNorm = path.replace(/\/+$/, '') || '/';
-			if (method.toUpperCase() !== 'POST' || pathNorm !== RESTART_REGISTRATION_PATH) return;
+			const basePath = (ctx.context.options?.basePath ?? '/api/auth').replace(/\/+$/, '') || '/';
+			const pathForAllow =
+				pathNorm === basePath ? '/' : pathNorm.startsWith(basePath + '/') ? pathNorm.slice(basePath.length) || '/' : pathNorm;
+			if (method.toUpperCase() !== 'POST' || pathForAllow !== RESTART_REGISTRATION_PATH) return;
 			const session = await getSessionFromCtx(ctx, { disableRefresh: true });
 			if (!session?.user?.id) return;
 			const body = (ctx as { body?: { email?: string } }).body ?? {};
@@ -304,3 +311,5 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 }
 
 export type { CorePassPluginOptions, EnrichmentBody, EnrichmentUserData } from './types.js';
+export { handlePasskeyDataRoute, PASSKEY_DATA_PATH } from './passkey-data-route.js';
+export type { HandlePasskeyDataRouteOptions } from './passkey-data-route.js';
