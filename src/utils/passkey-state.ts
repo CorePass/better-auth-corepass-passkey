@@ -13,7 +13,9 @@ const DEFAULT_ALLOW_ROUTES: string[] = [];
 const DEFAULT_ALLOW_METHODS = ['GET', 'HEAD', 'OPTIONS'];
 const DEFAULT_PASSKEY_REGISTRATION_ROUTES = [
 	'/passkey/generate-register-options',
-	'/passkey/verify-registration'
+	'/passkey/verify-registration',
+	'/passkey/generate-authenticate-options',
+	'/passkey/verify-authentication'
 ];
 
 export type PasskeyGateOptions = {

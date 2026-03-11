@@ -8,6 +8,7 @@
 
 import type { AuthContext } from 'better-auth';
 import { APIError, createAuthMiddleware, getSessionFromCtx } from 'better-auth/api';
+import { deleteSessionCookie } from 'better-auth/cookies';
 import {
 	createEnrichmentEndpoint,
 	createGetEnrichmentEndpoint,
@@ -182,6 +183,8 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 							}
 							// Clear cached session so the anonymous plugin's handler does a fresh lookup and gets null, allowing a new anonymous sign-in.
 							(ctx as { context: { session?: unknown } }).context.session = undefined;
+							// Clear session cookie in the response so the client does not send the stale token on the next request.
+							deleteSessionCookie(ctx);
 							return;
 						}
 						if (isAllowedBeforePasskey(path, method, gateOptions)) {
