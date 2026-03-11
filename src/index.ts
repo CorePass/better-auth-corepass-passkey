@@ -1,6 +1,7 @@
 /**
  * Better Auth plugin: CorePass enrichment for passkey.
  * Adds POST /passkey/data for signed enrichment payload, corepass_profile schema, requireO18y/requireO21y/requireKyc.
+ * Extends the official get-session response with CorePass profile (user.profile) when available and not expired.
  * Optional allowedAaguids: passkey create.before hook to allow only listed AAGUIDs.
  * Users without a passkey are blocked from auth endpoints except public behaviour (safe methods + passkey registration).
  * Must be used after @better-auth/passkey.
@@ -13,6 +14,10 @@ import { createEnrichmentEndpoint, createHeadEnrichmentEndpoint } from './enrich
 import type { CorePassPluginOptions } from './types.js';
 import { hasAnyPasskey, isAllowedBeforePasskey } from './utils/passkey-state.js';
 import { isValidEmail } from './utils/email.js';
+
+type AdapterFindOne = {
+	findOne: (arg: { model: string; where: { field: string; value: unknown }[] }) => Promise<unknown>;
+};
 
 function normalizeAaguid(value: string): string {
 	return String(value).toLowerCase().replace(/\s+/g, '').trim();
@@ -53,6 +58,11 @@ export const corepassPasskeySchema = {
 			},
 			kycDoc: {
 				type: 'string' as const,
+				required: false as const
+			},
+			/** CorePass app backed up (passphrase); distinct from passkey plugin’s backedUp (credential). */
+			backedUp: {
+				type: 'number' as const,
 				required: false as const
 			},
 			providedTill: {
@@ -261,6 +271,46 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 		};
 	}
 
+	/** After get-session: extend user with profile from corepass_profile when not expired. */
+	const getSessionAfterHook = {
+		matcher: (ctx: { path?: string }) => ctx.path === '/get-session',
+		handler: createAuthMiddleware(async (ctx) => {
+			const returned = ctx.context.returned;
+			if (returned == null) return;
+			let data: { session?: unknown; user?: { id?: string } & Record<string, unknown> } | null = null;
+			if (returned instanceof Response) {
+				if (returned.status !== 200) return;
+				try {
+					data = (await returned.clone().json()) as { session?: unknown; user?: { id?: string } & Record<string, unknown> };
+				} catch {
+					return;
+				}
+			} else if (typeof returned === 'object' && returned !== null && 'user' in returned) {
+				data = returned as { session?: unknown; user?: { id?: string } & Record<string, unknown> };
+			}
+			if (!data?.user?.id || !ctx.context.adapter) return;
+			const adapter = ctx.context.adapter as AdapterFindOne;
+			const profile = await adapter.findOne({
+				model: 'corepass_profile',
+				where: [{ field: 'userId', value: data.user.id }]
+			});
+			if (!profile) return;
+			const row = profile as { userId: string; coreId: string; o18y: number; o21y: number; kyc: number; kycDoc: string | null; backedUp: number | null; providedTill: number | null };
+			const now = Math.floor(Date.now() / 1000);
+			if (row.providedTill != null && row.providedTill < now) return;
+			data.user.profile = {
+				coreId: row.coreId,
+				o18y: !!row.o18y,
+				o21y: !!row.o21y,
+				kyc: !!row.kyc,
+				kycDoc: row.kycDoc ?? undefined,
+				backedUp: row.backedUp != null ? !!row.backedUp : undefined,
+				providedTill: row.providedTill ?? undefined
+			};
+			return ctx.json(data);
+		})
+	};
+
 	return {
 		id: 'corepass-passkey',
 		schema: corepassPasskeySchema,
@@ -289,7 +339,7 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 			}
 			return opts;
 		},
-		hooks: { before: [beforeHook], after: [afterHook] },
+		hooks: { before: [beforeHook], after: [afterHook, getSessionAfterHook] },
 		endpoints: {
 			passkeyDataHead: createHeadEnrichmentEndpoint(options),
 			passkeyData: createEnrichmentEndpoint(options)
@@ -305,6 +355,6 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 	};
 }
 
-export type { CorePassPluginOptions, EnrichmentBody, EnrichmentUserData } from './types.js';
+export type { CorePassPluginOptions, CorePassProfile, EnrichmentBody, EnrichmentUserData } from './types.js';
 export { handlePasskeyDataRoute, PASSKEY_DATA_PATH } from './passkey-data-route.js';
 export type { HandlePasskeyDataRouteOptions } from './passkey-data-route.js';

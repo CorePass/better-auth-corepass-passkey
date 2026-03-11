@@ -256,6 +256,7 @@ export function createEnrichmentEndpoint(options: CorePassPluginOptions) {
 				o21y: toBool(data.o21y) ? 1 : 0,
 				kyc: toBool(data.kyc) ? 1 : 0,
 				kycDoc: data.kycDoc ?? null,
+				backedUp: toBool(data.backedUp) ? 1 : 0,
 				providedTill
 			};
 			await upsertCorePassProfile(ctx, profileUpdate);
@@ -284,6 +285,7 @@ async function upsertCorePassProfile(
 		o21y: number;
 		kyc: number;
 		kycDoc: string | null;
+		backedUp: number;
 		providedTill: number | null;
 	}
 ): Promise<void> {
@@ -302,6 +304,7 @@ async function upsertCorePassProfile(
 				o21y: profile.o21y,
 				kyc: profile.kyc,
 				kycDoc: profile.kycDoc,
+				backedUp: profile.backedUp,
 				providedTill: profile.providedTill
 			}
 		});

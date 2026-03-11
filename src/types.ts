@@ -3,6 +3,18 @@
  * @see authjs-corepass-provider README
  */
 
+/** CorePass profile attached to user when present and not expired (get-session response). */
+export type CorePassProfile = {
+	coreId: string;
+	o18y: boolean;
+	o21y: boolean;
+	kyc: boolean;
+	kycDoc?: string;
+	/** CorePass app backed up (passphrase), not passkey credential backup. */
+	backedUp?: boolean;
+	providedTill?: number;
+};
+
 export type EnrichmentUserData = {
 	email?: string;
 	o18y?: boolean | number;
