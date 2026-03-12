@@ -358,3 +358,4 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 export type { CorePassPluginOptions, CorePassProfile, EnrichmentBody, EnrichmentUserData } from './types.js';
 export { handlePasskeyDataRoute, PASSKEY_DATA_PATH } from './passkey-data-route.js';
 export type { HandlePasskeyDataRouteOptions } from './passkey-data-route.js';
+export { hasAnyPasskey } from './utils/passkey-state.js';
