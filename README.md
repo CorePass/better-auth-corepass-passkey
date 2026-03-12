@@ -2,20 +2,21 @@
 
 Better Auth plugin that adds **CorePass enrichment** on top of [@better-auth/passkey](https://better-auth.com/docs/plugins/passkey): signed identity and profile data (Core ID, email, age/kyc flags) sent from the CorePass app after passkey registration, with Ed448 signature verification and optional gating (requireO18y, requireO21y, requireKyc).
 
-Use this plugin **after** the passkey plugin. It registers the `corepass_profile` schema and endpoints under your auth base path: **HEAD**, **GET**, **POST** `/passkey/data`, .
+Use this plugin **after** the passkey plugin. It registers the `corepass_profile` schema and endpoints under your auth base path: **HEAD** and **POST** `/passkey/data` only.
 
 ## Flow overview
 
 1. **Registration** – User starts passkey registration via Better Auth (passkey plugin). Email can come from a **form** (request body of `POST /sign-in/anonymous`, e.g. `signIn.anonymous({ email })`) and/or from **enrichment** later; enrichment overwrites when provided. If `requireRegistrationEmail` is true, a valid email is required in the request body **before** the account is created (otherwise the request is rejected). If `requireEmail` is true, email is required from enrichment only. If `requireAtLeastOneEmail` is true, email must be provided from at least one source. All emails are validated by regex. Default for all three is false.
 2. **Finalize** – With `finalize: 'immediate'` the user is active right away. With `finalize: 'after'` (default) the user stays on hold until enrichment is received.
-3. **Enrichment** – The CorePass app sends a signed payload to **POST** `{basePath}/passkey/data` (default `/auth/passkey/data`). The plugin verifies the Ed448 signature over canonical JSON, then:
+3. **Enrichment** – The CorePass app sends a signed payload to **POST** `{basePath}/passkey/data` (path `/passkey/data`; full path e.g. `/auth/passkey/data` when basePath is `/auth`). The plugin verifies the Ed448 signature over canonical JSON, then:
    - Finds the passkey by `credentialId`, loads the linked user
    - Validates Core ID (ICAN) with [blockchain-wallet-validator](https://github.com/sergical/blockchain-wallet-validator) (Core/ICAN); if invalid or network not in `allowNetwork`, user and sessions are deleted and an error is returned
    - Enforces `requireO18y` / `requireO21y` / `requireKyc` from `userData` if set
    - Updates user email when provided (enrichment overwrites any form/placeholder email), and user name from Core ID (first 4 + "…" + last 4 chars, uppercase)
    - Upserts `corepass_profile` (coreId, o18y, o21y, kyc, kycDoc, `providedTill` from `dataExp` in minutes)
    - Sets the passkey’s display name to Core ID (uppercased)
-4. **Data expiry** – If `userData.dataExp` (minutes) is set, the plugin stores `providedTill = now + dataExp * 60`. **GET** `/passkey/data` returns the profile only while `providedTill >= now`; after that it returns **410 Gone** so the portal cannot read the data.
+4. **Profile** – The plugin **extends the official Better Auth get-session response**: when the user has a `corepass_profile` and it is not expired (`providedTill >= now`), the session’s `user` object includes `user.profile` (coreId, o18y, o21y, kyc, kycDoc, backedUp, providedTill). No separate profile endpoint: use `authClient.getSession()` (or your server’s session fetch) to get the profile.
+5. **Data expiry** – If `userData.dataExp` (minutes) is set, the plugin stores `providedTill = now + dataExp * 60`. When expired, `user.profile` is omitted from get-session.
 
 ### Strict “passkey-only access” (anonymous bootstrap)
 
@@ -55,30 +56,25 @@ sequenceDiagram
 
     CorePass->>CorePass: User completes identity in CorePass
     CorePass->>CorePass: Sign payload (Ed448, canonical JSON)
-    CorePass->>BetterAuth: POST /auth/passkey/data (body + X-Signature, optional X-Public-Key)
+    CorePass->>BetterAuth: POST {basePath}/passkey/data (body + X-Signature, optional X-Public-Key)
     BetterAuth->>BetterAuth: Verify signature, validate timestamp
     BetterAuth->>BetterAuth: Check requireO18y / requireO21y / requireKyc
     BetterAuth->>BetterAuth: Update user (email), upsert corepass_profile, set passkey name = Core ID
     BetterAuth->>CorePass: 200 OK
 
     User->>Portal: Use app (session)
-    Portal->>BetterAuth: GET /auth/passkey/data (session)
-    alt providedTill unset or not expired
-        BetterAuth->>Portal: 200 + profile
-    else providedTill expired
-        BetterAuth->>Portal: 410 Gone (portal cannot get data)
-    end
 ```
 
 ## Endpoints
 
-All are under your Better Auth `basePath` (default `/auth`). With default basePath, the enrichment endpoint is **`/auth/passkey/data`**.
+Path is **`/passkey/data`**. The **plugin owns this route**: in your app’s handle/hooks call **`handlePasskeyDataRoute(request, { handler: auth.handler, basePath })`** (exported from this package). When the request is for `/passkey/data`, it returns the response (so you return it and skip basePath); otherwise it returns `null` and you continue to your normal handler. Other auth stays under your basePath (e.g. `/auth`). Plugin default basePath is `/api/auth`.
 
-| Method | Path (relative to basePath) | Full path (default) | Description |
-| --- | --- | --- | --- |
-| **HEAD** | `/passkey/data` | `/auth/passkey/data` | **200** if enrichment is available (`finalize: 'after'`), **404** if not (`finalize: 'immediate'`). Use to detect whether the app should send enrichment. |
-| **GET** | `/passkey/data` | `/auth/passkey/data` | Requires session. Returns current user’s CorePass profile plus `hasPasskey` and `finalized`. **410 Gone** if `providedTill` has passed. |
-| **POST** | `/passkey/data` | `/auth/passkey/data` | CorePass enrichment: body + `X-Signature` (Ed448). Verifies signature, applies options, stores profile, updates user email and passkey name. |
+| Method | Path | Description |
+| --- | --- | --- |
+| **HEAD** | `/passkey/data` | **Only method to verify if the endpoint is active.** **200** if enrichment flow is available (`finalize: 'after'`), **404** if not (`finalize: 'immediate'`). Use to detect whether the CorePass app should send enrichment. Do not use GET for this. |
+| **POST** | `/passkey/data` | **Receive data from the application (CorePass) for verification.** Body + `X-Signature` (Ed448). Verifies signature, applies options, stores profile, updates user email and passkey name. |
+
+**Profile (CorePass data)** is not a separate endpoint. The plugin extends the **official Better Auth get-session** response: call `getSession()` (client or server); when the user has an unexpired CorePass profile, `user.profile` is present with `coreId`, `o18y`, `o21y`, `kyc`, `kycDoc`, `backedUp`, `providedTill`. Type: `CorePassProfile` (exported from this package).
 
 ## POST /passkey/data: payload and signature
 
@@ -186,7 +182,7 @@ Only **anonymous registration** can be restarted: when a user with no passkey PO
 | --- | --- | --- |
 | `/sign-in/anonymous` | POST | **Restart registration** (anonymous only): delete current user/sessions so handler can create a new one. |
 | `/passkey/generate-register-options`, `/passkey/verify-registration` | POST | Allowed before passkey (passkey plugin). |
-| `/passkey/data` | HEAD, GET, POST | Plugin enrichment endpoint (POST requires passkey after registration). |
+| `/passkey/data` | HEAD, POST | HEAD = verify if active; POST = receive data from application (CorePass) for verification. |
 | `/get-session` | GET | Allowed (safe method). |
 
 Other paths (e.g. `/sign-up/email`, `/sign-in/email`, OAuth callbacks, `/sign-out`) are not restarted; if the user has no passkey they are blocked (or timeout) and the client should show "wait for expiration and retry" where applicable.
@@ -203,10 +199,13 @@ CREATE TABLE "corepass_profile" (
   "o21y" INTEGER NOT NULL,
   "kyc" INTEGER NOT NULL,
   "kycDoc" TEXT,
+  "backedUp" INTEGER,
   "providedTill" INTEGER
 );
 CREATE INDEX "corepass_profile_userId_idx" ON "corepass_profile"("userId");
 ```
+
+**Note:** `backedUp` here is **CorePass app** backup (passphrase), not the passkey plugin’s `backedUp` (credential sync). Different tables and semantics; no collision.
 
 Run your Better Auth schema generation / migrations so this table exists.
 
@@ -240,13 +239,12 @@ Minimal cases to verify the strict passkey-only flow:
 3. **After passkey registration → protected route allowed**
    With the same user now having one passkey, call the previously blocked endpoint. Expect **200** (or normal response).
 
-4. **After enrichment → GET /passkey/data**
-   With session and passkey, call GET `/passkey/data`. Expect **200** and JSON including `hasPasskey: true`, `finalized: true`, and profile fields when not expired.
+4. **Verify /passkey/data active → HEAD /passkey/data**
+   Call HEAD `/passkey/data`. With `finalize: 'after'` expect **200**; with `finalize: 'immediate'` expect **404**. Do not use enrichment for this.
 
 ## References
 
 - [Better Auth – Passkey](https://better-auth.com/docs/plugins/passkey)
-- [Better Auth – Your first plugin](https://better-auth.com/docs/guides/your-first-plugin)
 - [CorePass](https://corepass.net/)
 
 ## License
