@@ -17,6 +17,11 @@ import {
 import { isValidEmail } from './utils/email.js';
 import type { CorePassPluginOptions, EnrichmentBody, EnrichmentUserData } from './types.js';
 
+/** UUID v4 as 32 hex chars (no hyphens). */
+function uuidV4NoHyphens(): string {
+	return globalThis.crypto.randomUUID().replace(/-/g, '');
+}
+
 const enrichmentBodySchema = z.object({
 	coreId: z.string(),
 	credentialId: z.string(),
@@ -259,7 +264,18 @@ export function createEnrichmentEndpoint(options: CorePassPluginOptions) {
 				backedUp: toBool(data.backedUp) ? 1 : 0,
 				providedTill
 			};
-			await upsertCorePassProfile(ctx, profileUpdate);
+			try {
+				await upsertCorePassProfile(ctx, profileUpdate);
+			} catch (err) {
+				const apiErr =
+					err instanceof APIError
+						? err
+						: new APIError('BAD_REQUEST', {
+								message: 'This Core ID is already linked to another account.',
+								code: 'CORE_ID_TAKEN'
+							});
+				await failAndClean(apiErr);
+			}
 
 			return ctx.json({ ok: true }, { status: 200 });
 		}
@@ -290,11 +306,11 @@ async function upsertCorePassProfile(
 	}
 ): Promise<void> {
 	const adapter = ctx.context.adapter as Adapter;
-	const existing = await adapter.findOne({
+	const existingByUser = await adapter.findOne({
 		model: 'corepass_profile',
 		where: [{ field: 'userId', value: profile.userId }]
 	});
-	if (existing) {
+	if (existingByUser) {
 		await adapter.update({
 			model: 'corepass_profile',
 			where: [{ field: 'userId', value: profile.userId }],
@@ -311,7 +327,7 @@ async function upsertCorePassProfile(
 	} else {
 		await adapter.create({
 			model: 'corepass_profile',
-			data: profile as unknown as Record<string, unknown>
+			data: { ...profile, id: uuidV4NoHyphens() } as unknown as Record<string, unknown>
 		});
 	}
 }
