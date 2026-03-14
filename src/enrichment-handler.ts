@@ -18,10 +18,6 @@ import { isValidEmail } from './utils/email.js';
 import type { CorePassPluginOptions, EnrichmentBody, EnrichmentUserData } from './types.js';
 
 /** UUID v4 as 32 hex chars (no hyphens). */
-function uuidV4NoHyphens(): string {
-	return globalThis.crypto.randomUUID().replace(/-/g, '');
-}
-
 const enrichmentBodySchema = z.object({
 	coreId: z.string(),
 	credentialId: z.string(),
@@ -327,7 +323,7 @@ async function upsertCorePassProfile(
 	} else {
 		await adapter.create({
 			model: 'corepass_profile',
-			data: { ...profile, id: uuidV4NoHyphens() } as unknown as Record<string, unknown>
+			data: { ...profile } as unknown as Record<string, unknown>
 		});
 	}
 }
