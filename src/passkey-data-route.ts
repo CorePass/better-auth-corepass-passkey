@@ -1,23 +1,23 @@
 /**
- * Serves the enrichment endpoint at exactly /passkey/data (no base path).
+ * Serves the enrichment endpoint at exactly /webauthn/data (no base path).
  * Only HEAD (verify if active) and POST (receive data from application for verification) are allowed.
- * When the request path is /passkey/data and method is HEAD or POST, rewrites URL to {basePath}/passkey/data
+ * When the request path is /webauthn/data and method is HEAD or POST, rewrites URL to {basePath}/webauthn/data
  * and forwards to the auth handler. GET returns 405 Method Not Allowed.
  */
 
-export const PASSKEY_DATA_PATH = '/passkey/data';
+export const PASSKEY_DATA_PATH = '/webauthn/data';
 
 const ALLOWED_METHODS = new Set(['HEAD', 'POST']);
 
 export type HandlePasskeyDataRouteOptions = {
 	/** Better Auth handler (e.g. auth.handler). */
 	handler: (request: Request) => Promise<Response>;
-	/** Auth base path (e.g. /auth). Rewritten request will use {basePath}/passkey/data. */
+	/** Auth base path (e.g. /auth). Rewritten request will use {basePath}/webauthn/data. */
 	basePath: string;
 };
 
 /**
- * If the request is for HEAD or POST /passkey/data, rewrites URL to {basePath}/passkey/data,
+ * If the request is for HEAD or POST /webauthn/data, rewrites URL to {basePath}/webauthn/data,
  * calls the auth handler, and returns the response. GET returns 405. Other paths return null.
  */
 export async function handlePasskeyDataRoute(

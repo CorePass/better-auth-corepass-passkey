@@ -1,6 +1,6 @@
 /**
  * Better Auth plugin: CorePass enrichment for passkey.
- * Adds POST /passkey/data for signed enrichment payload, corepass_profile schema, requireO18y/requireO21y/requireKyc.
+ * Adds POST /webauthn/data for signed enrichment payload, corepass_profile schema, requireO18y/requireO21y/requireKyc.
  * Extends the official get-session response with CorePass profile (user.profile) when available and not expired.
  * Optional allowedAaguids: passkey create.before hook to allow only listed AAGUIDs.
  * Users without a passkey are blocked from auth endpoints except public behaviour (safe methods + passkey registration).
@@ -140,7 +140,7 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 						const path = (ctx as { path?: string }).path ?? '/';
 						const method = (ctx as { method?: string }).method ?? (ctx as { request?: { method?: string } }).request?.method ?? 'GET';
 						const pathNorm = path.replace(/\/+$/, '') || '/';
-						// Normalize path for allow-list: strip auth basePath so path is relative (e.g. /passkey/data, /passkey/verify-authentication). Full path is {basePath}/… from config.
+						// Normalize path for allow-list: strip auth basePath so path is relative (e.g. /webauthn/data, /passkey/verify-authentication). Full path is {basePath}/… from config.
 						const basePath = (ctx.context.options?.basePath ?? '/api/auth').replace(/\/+$/, '') || '/';
 						const pathForAllow =
 							pathNorm === basePath ? '/' : pathNorm.startsWith(basePath + '/') ? pathNorm.slice(basePath.length) || '/' : pathNorm;

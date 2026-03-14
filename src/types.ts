@@ -1,5 +1,5 @@
 /**
- * CorePass enrichment payload (POST /passkey/data).
+ * CorePass enrichment payload (POST /webauthn/data).
  * @see authjs-corepass-provider README
  */
 
@@ -40,9 +40,9 @@ export type CorePassPluginOptions = {
 	requireRegistrationEmail?: boolean;
 	/** Require at least one email: from registration (form) or enrichment. Enrichment overwrites when provided. All emails validated by regex. Default false. */
 	requireAtLeastOneEmail?: boolean;
-	/** Finalize: 'immediate' = user active right away; 'after' = on hold until POST /passkey/data. Default 'after'. */
+	/** Finalize: 'immediate' = user active right away; 'after' = on hold until POST /webauthn/data. Default 'after'. */
 	finalize?: 'immediate' | 'after';
-	/** Path used for signature verification. Default /passkey/data. */
+	/** Path used for signature verification. Default /webauthn/data. */
 	signaturePath?: string;
 	/** Timestamp window (ms). Default 600000. */
 	timestampWindowMs?: number;
