@@ -1,6 +1,6 @@
 /**
- * passkey/data endpoints:
- * - HEAD: only method to verify if /passkey/data is active. 200 if enrichment flow is available (finalize "after"), 404 if not (e.g. "immediate").
+ * webauthn/data endpoints:
+ * - HEAD: only method to verify if /webauthn/data is active. 200 if enrichment flow is available (finalize "after"), 404 if not (e.g. "immediate").
  * - POST: receive data from the application (CorePass) for verification. Ed448 signature, requireEmail/requireO18y/requireO21y/requireKyc and coreId; on failure delete user and sessions. On success store enrichment, update user email and name, passkey name.
  */
 
@@ -35,7 +35,7 @@ const enrichmentBodySchema = z.object({
 		.optional()
 });
 
-const DEFAULT_ENRICHMENT_PATH = '/passkey/data';
+const DEFAULT_ENRICHMENT_PATH = '/webauthn/data';
 const DEFAULT_TIMESTAMP_WINDOW_MS = 600_000;
 
 function toBool(v: boolean | number | undefined): boolean {
@@ -52,7 +52,7 @@ function coreIdToDisplayName(coreId: string): string {
 	return `${first4}…${last4}`;
 }
 
-/** HEAD /passkey/data: 200 if enrichment flow is available (finalize "after"), 404 if immediate. */
+/** HEAD /webauthn/data: 200 if enrichment flow is available (finalize "after"), 404 if immediate. */
 export function createHeadEnrichmentEndpoint(options: CorePassPluginOptions) {
 	const finalize = options.finalize ?? 'after';
 	return createAuthEndpoint(
