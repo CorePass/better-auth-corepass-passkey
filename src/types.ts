@@ -96,4 +96,13 @@ export type CorePassPluginOptions = {
 	 * Default 300_000 (5 minutes). Set to 0 to disable.
 	 */
 	deleteAccountWithoutPasskeyAfterMs?: number;
+	/**
+	 * Path used for restore signature verification. Default `/webauthn/restore`.
+	 * Must match what CorePass uses when signing the restore payload.
+	 */
+	restoreSignaturePath?: string;
+	/**
+	 * How long a restore challenge is valid (ms). Default 300_000 (5 minutes).
+	 */
+	restoreChallengeExpiryMs?: number;
 };
