@@ -11,6 +11,11 @@ import type { AuthContext } from 'better-auth';
 import { APIError, createAuthMiddleware, getSessionFromCtx } from 'better-auth/api';
 import { deleteSessionCookie } from 'better-auth/cookies';
 import { createEnrichmentEndpoint, createHeadEnrichmentEndpoint } from './enrichment-handler.js';
+import {
+	createRestoreInitEndpoint,
+	createRestoreVerifyEndpoint,
+	createRestoreCompleteEndpoint
+} from './restore-handler.js';
 import type { CorePassPluginOptions } from './types.js';
 import { hasAnyPasskey, isAllowedBeforePasskey } from './utils/passkey-state.js';
 import { isValidEmail } from './utils/email.js';
@@ -60,7 +65,7 @@ export const corepassPasskeySchema = {
 				type: 'string' as const,
 				required: false as const
 			},
-			/** CorePass app backed up (passphrase); distinct from passkey plugin’s backedUp (credential). */
+			/** CorePass app backed up (passphrase); distinct from passkey plugin's backedUp (credential). */
 			backedUp: {
 				type: 'number' as const,
 				required: false as const
@@ -68,6 +73,35 @@ export const corepassPasskeySchema = {
 			providedTill: {
 				type: 'number' as const,
 				required: false as const
+			}
+		}
+	},
+	restore_challenge: {
+		fields: {
+			/** UUID — the restore token shown in QR code. */
+			id: {
+				type: 'string' as const,
+				required: true as const
+			},
+			/** Resolved user ID after CorePass verification (null until verified). */
+			userId: {
+				type: 'string' as const,
+				required: false as const
+			},
+			/** pending → verified (CorePass signed) → completed (session created). */
+			status: {
+				type: 'string' as const,
+				required: true as const
+			},
+			/** Unix timestamp (seconds) when this challenge expires. */
+			expiresAt: {
+				type: 'number' as const,
+				required: true as const
+			},
+			/** Unix timestamp (seconds) when created. */
+			createdAt: {
+				type: 'number' as const,
+				required: true as const
 			}
 		}
 	}
@@ -342,7 +376,10 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 		hooks: { before: [beforeHook], after: [afterHook, getSessionAfterHook] },
 		endpoints: {
 			passkeyDataHead: createHeadEnrichmentEndpoint(options),
-			passkeyData: createEnrichmentEndpoint(options)
+			passkeyData: createEnrichmentEndpoint(options),
+			restoreInit: createRestoreInitEndpoint(options),
+			restoreVerify: createRestoreVerifyEndpoint(options),
+			restoreComplete: createRestoreCompleteEndpoint(options)
 		},
 		$ERROR_CODES: {
 			PASSKEY_REQUIRED: PASSKEY_REQUIRED_ERROR,
@@ -350,12 +387,17 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 			EMAIL_REQUIRED: EMAIL_REQUIRED_ERROR,
 			CORE_ID_INVALID: CORE_ID_INVALID_ERROR,
 			CORE_ID_NETWORK_NOT_ALLOWED: CORE_ID_NETWORK_NOT_ALLOWED_ERROR,
-			BACKED_UP_REQUIRED: BACKED_UP_REQUIRED_ERROR
+			BACKED_UP_REQUIRED: BACKED_UP_REQUIRED_ERROR,
+			CORE_ID_NOT_FOUND: { message: 'No account found for this Core ID.', code: 'CORE_ID_NOT_FOUND' as const },
+			RESTORE_CHALLENGE_NOT_FOUND: { message: 'Restore challenge not found.', code: 'RESTORE_CHALLENGE_NOT_FOUND' as const },
+			RESTORE_CHALLENGE_EXPIRED: { message: 'Restore challenge expired.', code: 'RESTORE_CHALLENGE_EXPIRED' as const },
+			RESTORE_CHALLENGE_USED: { message: 'Restore challenge already used.', code: 'RESTORE_CHALLENGE_USED' as const },
+			RESTORE_ALREADY_COMPLETED: { message: 'Restore already completed.', code: 'RESTORE_ALREADY_COMPLETED' as const }
 		}
 	};
 }
 
 export type { CorePassPluginOptions, CorePassProfile, EnrichmentBody, EnrichmentUserData } from './types.js';
-export { handlePasskeyDataRoute, PASSKEY_DATA_PATH } from './passkey-data-route.js';
+export { handlePasskeyDataRoute, PASSKEY_DATA_PATH, RESTORE_BASE_PATH } from './passkey-data-route.js';
 export type { HandlePasskeyDataRouteOptions } from './passkey-data-route.js';
 export { hasAnyPasskey } from './utils/passkey-state.js';

@@ -73,6 +73,9 @@ Path is **`/passkey/data`**. The **plugin owns this route**: in your app’s han
 | --- | --- | --- |
 | **HEAD** | `/passkey/data` | **Only method to verify if the endpoint is active.** **200** if enrichment flow is available (`finalize: 'after'`), **404** if not (`finalize: 'immediate'`). Use to detect whether the CorePass app should send enrichment. Do not use GET for this. |
 | **POST** | `/passkey/data` | **Receive data from the application (CorePass) for verification.** Body + `X-Signature` (Ed448). Verifies signature, applies options, stores profile, updates user email and passkey name. |
+| **POST** | `/webauthn/restore/init` | **Browser** starts passkey restore flow. Returns `{ restoreId, expiresAt, signaturePath }`. |
+| **POST** | `/webauthn/restore` | **CorePass** sends Ed448-signed `{ coreId, restoreId, timestamp }`. Verifies signature, deletes old passkeys and sessions. |
+| **POST** | `/webauthn/restore/complete` | **Browser** polls/calls to exchange verified restoreId for a session cookie. Returns `{ ok: false, status: 'pending' }` while waiting, `{ ok: true, status: 'completed' }` when done. |
 
 **Profile (CorePass data)** is not a separate endpoint. The plugin extends the **official Better Auth get-session** response: call `getSession()` (client or server); when the user has an unexpired CorePass profile, `user.profile` is present with `coreId`, `o18y`, `o21y`, `kyc`, `kycDoc`, `backedUp`, `providedTill`. Type: `CorePassProfile` (exported from this package).
 
@@ -91,6 +94,71 @@ Path is **`/passkey/data`**. The **plugin owns this route**: in your app’s han
 - `canonicalJsonBody`: object keys sorted alphabetically, JSON stringified with no extra whitespace.
 
 **userData** (all optional): `email`, `o18y`, `o21y`, `kyc`, `kycDoc`, `dataExp` (minutes → stored as `providedTill`), `backedUp` (boolean: CorePass backed up, not passkey). Email: validated with regex (`local@domain.tld`, max 254 chars). Use `requireEmail` to require it in the payload only; `requireRegistrationEmail` to require the form email at registration; `requireAtLeastOneEmail` to require email from registration or enrichment (enrichment overwrites; non-verified registration email allowed). Core ID is validated as a Core (ICAN) address; invalid IDs or network not in `allowNetwork` cause the user and sessions to be deleted and **400** `CORE_ID_INVALID` or `CORE_ID_NETWORK_NOT_ALLOWED`. If `requireO18y` / `requireO21y` / `requireKyc` are set, the plugin rejects when the flag is not `true`. If `allowOnlyBackedUp` is true, `userData.backedUp` must be present and true or the plugin deletes the user and sessions and returns **400** `BACKED_UP_REQUIRED`. After signature verification, if data is invalid or any required check fails, the plugin **deletes that user and their sessions** and then returns an error.
+
+## Passkey restore (lost phone / new device)
+
+When a user loses their passkey (phone lost, changed, or passkey accidentally deleted), they can prove identity via CorePass Ed448 signature and register a new passkey. No re-enrichment needed — the existing `corepass_profile` is preserved.
+
+### Restore flow
+
+```
+Browser                          Backend                         CorePass
+   |                                |                               |
+   | 1. POST /webauthn/restore/init |                               |
+   |------------------------------->|                               |
+   |  { restoreId, signaturePath }  |                               |
+   |<-------------------------------|                               |
+   |                                |                               |
+   | 2. Show QR code with           |                               |
+   |    restoreId + signaturePath   |                               |
+   |                                |                               |
+   |                  3. User scans QR in CorePass                  |
+   |                                |                               |
+   |                                | 4. POST /webauthn/restore     |
+   |                                |   X-Signature: Ed448          |
+   |                                |   { coreId, restoreId,        |
+   |                                |     timestamp }               |
+   |                                |<------------------------------|
+   |                                |                               |
+   |                                | 5. Verify Ed448 signature     |
+   |                                | 6. Find user by coreId        |
+   |                                | 7. Delete old passkeys        |
+   |                                | 8. Delete old sessions        |
+   |                                | 9. Mark challenge verified    |
+   |                                |----> { ok: true }             |
+   |                                |                               |
+   | 10. POST /webauthn/restore/complete                            |
+   |------------------------------->|                               |
+   |                                | 11. Create session             |
+   |                                | 12. Set cookie                |
+   |   { ok: true, status: 'completed' }                            |
+   |<-------------------------------|                               |
+   |                                |                               |
+   | 13. Normal passkey registration flow (add new passkey)         |
+   | 14. No re-enrichment needed (corepass_profile already exists)  |
+```
+
+### Restore signature
+
+CorePass signs the restore payload the same way as enrichment:
+
+```text
+"POST" + "\n" + restoreSignaturePath + "\n" + canonicalJson({ coreId, restoreId, timestamp })
+```
+
+- `restoreSignaturePath` defaults to `/webauthn/restore` (configurable via `restoreSignaturePath`).
+- `timestamp` is Unix **microseconds** (same as enrichment).
+
+### Restore options
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `restoreSignaturePath` | `string` | `/webauthn/restore` | Path used in signature input. |
+| `restoreChallengeExpiryMs` | `number` | `300000` (5 min) | How long a restore challenge is valid. |
+
+### Routing
+
+Add restore paths to `handlePasskeyDataRoute` — it already handles `/webauthn/restore/*` automatically alongside `/webauthn/data`. No additional routing setup needed.
 
 ## Installation and setup
 
@@ -207,7 +275,19 @@ CREATE INDEX "corepass_profile_userId_idx" ON "corepass_profile"("userId");
 
 **Note:** `backedUp` here is **CorePass app** backup (passphrase), not the passkey plugin’s `backedUp` (credential sync). Different tables and semantics; no collision.
 
-Run your Better Auth schema generation / migrations so this table exists.
+The plugin also adds a `restore_challenge` table for passkey recovery:
+
+```sql
+CREATE TABLE "restore_challenge" (
+  "id" TEXT NOT NULL PRIMARY KEY,
+  "userId" TEXT,
+  "status" TEXT NOT NULL,
+  "expiresAt" INTEGER NOT NULL,
+  "createdAt" INTEGER NOT NULL
+);
+```
+
+Run your Better Auth schema generation / migrations so these tables exist.
 
 Better Auth and the passkey plugin manage WebAuthn challenge expiry via their own storage and TTLs. Registrations that never receive enrichment (e.g. user abandons after passkey create) remain as users with a passkey but no `corepass_profile`. You can expire or delete them manually (e.g. by age using `user.createdAt` and absence of `corepass_profile`) if needed.
 
