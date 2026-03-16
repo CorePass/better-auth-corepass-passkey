@@ -78,28 +78,18 @@ export const corepassPasskeySchema = {
 	},
 	restore_challenge: {
 		fields: {
-			/** UUID — the restore token shown in QR code. */
-			id: {
-				type: 'string' as const,
-				required: true as const
-			},
 			/** Resolved user ID after CorePass verification (null until verified). */
 			userId: {
 				type: 'string' as const,
 				required: false as const
 			},
-			/** pending → verified (CorePass signed) → completed (session created). */
+			/** pending → verifying → verified → completed. */
 			status: {
 				type: 'string' as const,
 				required: true as const
 			},
 			/** Unix timestamp (seconds) when this challenge expires. */
 			expiresAt: {
-				type: 'number' as const,
-				required: true as const
-			},
-			/** Unix timestamp (seconds) when created. */
-			createdAt: {
 				type: 'number' as const,
 				required: true as const
 			}

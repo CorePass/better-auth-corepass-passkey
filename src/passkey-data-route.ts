@@ -58,10 +58,14 @@ function rewriteAndForward(
 	const rewrittenPath = base ? `${base}${pathname}` : pathname;
 	const url = new URL(request.url);
 	url.pathname = rewrittenPath;
-	const rewrittenRequest = new Request(url, {
+	const init: RequestInit = {
 		method: request.method,
 		headers: request.headers,
 		body: method === 'POST' ? request.body : undefined
-	});
+	};
+	if (method === 'POST') {
+		(init as Record<string, unknown>).duplex = 'half';
+	}
+	const rewrittenRequest = new Request(url, init);
 	return options.handler(rewrittenRequest);
 }

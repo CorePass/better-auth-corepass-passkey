@@ -71,20 +71,22 @@ export function createRestoreInitEndpoint(options: CorePassPluginOptions) {
 		},
 		async (ctx) => {
 			const adapter = ctx.context.adapter as Adapter;
-			const restoreId = crypto.randomUUID();
 			const now = Math.floor(Date.now() / 1000);
 			const expiresAt = now + Math.floor(expiryMs / 1000);
 
-			await adapter.create({
+			const created = (await adapter.create({
 				model: 'restore_challenge',
 				data: {
-					id: restoreId,
 					userId: null,
 					status: 'pending',
-					expiresAt,
-					createdAt: now
+					expiresAt
 				}
-			});
+			})) as { id: string } | null;
+
+			const restoreId = created?.id;
+			if (!restoreId) {
+				throw new APIError('INTERNAL_SERVER_ERROR', { message: 'Failed to create restore challenge.' });
+			}
 
 			return ctx.json({
 				restoreId,
@@ -209,13 +211,19 @@ export function createRestoreVerifyEndpoint(options: CorePassPluginOptions) {
 				});
 			}
 
-			// Find user by coreId
+			// Find user by coreId — revert challenge if not found
 			const coreIdUpper = coreId.trim().toUpperCase();
 			const profile = await adapter.findOne({
 				model: 'corepass_profile',
 				where: [{ field: 'coreId', value: coreIdUpper }]
 			});
 			if (!profile) {
+				// Revert to pending so user can try again with a different coreId (or same QR, new attempt)
+				await adapter.update({
+					model: 'restore_challenge',
+					where: [{ field: 'id', value: restoreId }],
+					update: { status: 'pending' }
+				}).catch(() => {});
 				throw new APIError('NOT_FOUND', {
 					message: 'No account found for this Core ID.',
 					code: 'CORE_ID_NOT_FOUND'
@@ -341,7 +349,6 @@ export function createRestoreCompleteEndpoint(_options: CorePassPluginOptions) {
 
 			// Mark as completed FIRST to prevent concurrent /complete calls from creating
 			// duplicate sessions (only one caller wins the status transition).
-			// We re-read after update to confirm we own the transition.
 			await adapter.update({
 				model: 'restore_challenge',
 				where: [{ field: 'id', value: restoreId }],
@@ -349,8 +356,7 @@ export function createRestoreCompleteEndpoint(_options: CorePassPluginOptions) {
 			});
 
 			// Verify the user still exists (could have been deleted between verify and complete)
-			const dbAdapter = ctx.context.adapter as Adapter;
-			const user = await dbAdapter.findOne({
+			const user = await adapter.findOne({
 				model: 'user',
 				where: [{ field: 'id', value: ch.userId }]
 			});
@@ -361,9 +367,23 @@ export function createRestoreCompleteEndpoint(_options: CorePassPluginOptions) {
 				});
 			}
 
-			// Create session for the user
+			// Create session for the user — if this fails, revert challenge so browser can retry
 			const internal = ctx.context.internalAdapter as unknown as InternalAdapterCreateSession;
-			const sessionRecord = await internal.createSession(ch.userId, ctx.request);
+			let sessionRecord: unknown;
+			try {
+				sessionRecord = await internal.createSession(ch.userId, ctx.request);
+			} catch (err) {
+				// Revert to verified so the browser can retry /complete
+				await adapter.update({
+					model: 'restore_challenge',
+					where: [{ field: 'id', value: restoreId }],
+					update: { status: 'verified' }
+				}).catch(() => {});
+				ctx.context.logger?.error?.('Failed to create session during restore complete', err);
+				throw new APIError('INTERNAL_SERVER_ERROR', {
+					message: 'Failed to create session. Please try again.'
+				});
+			}
 
 			// Set session cookie so the browser is authenticated
 			if (sessionRecord) {
