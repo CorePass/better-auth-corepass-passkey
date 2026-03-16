@@ -2,13 +2,13 @@
 
 Better Auth plugin that adds **CorePass enrichment** on top of [@better-auth/passkey](https://better-auth.com/docs/plugins/passkey): signed identity and profile data (Core ID, email, age/kyc flags) sent from the CorePass app after passkey registration, with Ed448 signature verification and optional gating (requireO18y, requireO21y, requireKyc).
 
-Use this plugin **after** the passkey plugin. It registers the `corepass_profile` schema and endpoints under your auth base path: **HEAD** and **POST** `/passkey/data` only.
+Use this plugin **after** the passkey plugin. It registers the `corepass_profile` schema and endpoints under your auth base path: **HEAD** and **POST** `/webauthn/data` only.
 
 ## Flow overview
 
 1. **Registration** – User starts passkey registration via Better Auth (passkey plugin). Email can come from a **form** (request body of `POST /sign-in/anonymous`, e.g. `signIn.anonymous({ email })`) and/or from **enrichment** later; enrichment overwrites when provided. If `requireRegistrationEmail` is true, a valid email is required in the request body **before** the account is created (otherwise the request is rejected). If `requireEmail` is true, email is required from enrichment only. If `requireAtLeastOneEmail` is true, email must be provided from at least one source. All emails are validated by regex. Default for all three is false.
 2. **Finalize** – With `finalize: 'immediate'` the user is active right away. With `finalize: 'after'` (default) the user stays on hold until enrichment is received.
-3. **Enrichment** – The CorePass app sends a signed payload to **POST** `{basePath}/passkey/data` (path `/passkey/data`; full path e.g. `/auth/passkey/data` when basePath is `/auth`). The plugin verifies the Ed448 signature over canonical JSON, then:
+3. **Enrichment** – The CorePass app sends a signed payload to **POST** `{basePath}/webauthn/data` (path `/webauthn/data`; full path e.g. `/auth/webauthn/data` when basePath is `/auth`). The plugin verifies the Ed448 signature over canonical JSON, then:
    - Finds the passkey by `credentialId`, loads the linked user
    - Validates Core ID (ICAN) with [blockchain-wallet-validator](https://github.com/sergical/blockchain-wallet-validator) (Core/ICAN); if invalid or network not in `allowNetwork`, user and sessions are deleted and an error is returned
    - Enforces `requireO18y` / `requireO21y` / `requireKyc` from `userData` if set
@@ -23,7 +23,7 @@ Use this plugin **after** the passkey plugin. It registers the `corepass_profile
 The plugin always enforces **passkey-only access**: users without at least one passkey are blocked from auth endpoints except public behaviour (safe methods and passkey registration routes). This is intended for **anonymous bootstrap** flows (e.g. Better Auth anonymous plugin): the app can sign in anonymously, but the account cannot be used until the user registers a passkey.
 
 1. App signs in anonymously (or creates a session without a passkey).
-2. Only public behaviour is allowed until the user has a passkey: safe methods (GET, HEAD, OPTIONS) and passkey registration routes (`/passkey/generate-register-options`, `/passkey/verify-registration`). No other routes (e.g. `/passkey/data`, `/sign-out`) unless you add them via `allowRoutesBeforePasskey`.
+2. Only public behaviour is allowed until the user has a passkey: safe methods (GET, HEAD, OPTIONS) and passkey registration routes (`/passkey/generate-register-options`, `/passkey/verify-registration`). No other routes (e.g. `/webauthn/data`, `/sign-out`) unless you add them via `allowRoutesBeforePasskey`.
 3. User must add a passkey (scan/add to device); most complete this within a few minutes.
 4. Once the user has at least one passkey, normal access to all auth endpoints is allowed.
 
@@ -56,33 +56,35 @@ sequenceDiagram
 
     CorePass->>CorePass: User completes identity in CorePass
     CorePass->>CorePass: Sign payload (Ed448, canonical JSON)
-    CorePass->>BetterAuth: POST {basePath}/passkey/data (body + X-Signature, optional X-Public-Key)
+    CorePass->>BetterAuth: POST {basePath}/webauthn/data (body + X-Signature, optional X-Public-Key, optional X-Algorithm)
     BetterAuth->>BetterAuth: Verify signature, validate timestamp
     BetterAuth->>BetterAuth: Check requireO18y / requireO21y / requireKyc
     BetterAuth->>BetterAuth: Update user (email), upsert corepass_profile, set passkey name = Core ID
-    BetterAuth->>CorePass: 200 OK
+    BetterAuth->>CorePass: 200 OK (X-Algorithm: ed448 or request value)
 
     User->>Portal: Use app (session)
+
+    Note over User,CorePass: Restore flow (finalize 'after' only): lost device → POST /webauthn/restore/init → QR → CorePass signs → POST /webauthn/restore → POST /webauthn/restore/complete → new passkey
 ```
 
 ## Endpoints
 
-Path is **`/passkey/data`**. The **plugin owns this route**: in your app’s handle/hooks call **`handlePasskeyDataRoute(request, { handler: auth.handler, basePath })`** (exported from this package). When the request is for `/passkey/data`, it returns the response (so you return it and skip basePath); otherwise it returns `null` and you continue to your normal handler. Other auth stays under your basePath (e.g. `/auth`). Plugin default basePath is `/api/auth`.
+Path is **`/webauthn/data`**. The **plugin owns this route**: in your app’s handle/hooks call **`handlePasskeyDataRoute(request, { handler: auth.handler, basePath })`** (exported from this package). When the request is for `/webauthn/data` or `/webauthn/restore/*`, it returns the response (so you return it and skip basePath); otherwise it returns `null` and you continue to your normal handler. Other auth stays under your basePath (e.g. `/auth`). Plugin default basePath is `/api/auth`.
 
 | Method | Path | Description |
 | --- | --- | --- |
-| **HEAD** | `/passkey/data` | **Only method to verify if the endpoint is active.** **200** if enrichment flow is available (`finalize: 'after'`), **404** if not (`finalize: 'immediate'`). Use to detect whether the CorePass app should send enrichment. Do not use GET for this. |
-| **POST** | `/passkey/data` | **Receive data from the application (CorePass) for verification.** Body + `X-Signature` (Ed448). Verifies signature, applies options, stores profile, updates user email and passkey name. |
-| **POST** | `/webauthn/restore/init` | **Browser** starts passkey restore flow. Returns `{ restoreId, expiresAt, signaturePath }`. |
+| **HEAD** | `/webauthn/data` | **Only method to verify if the endpoint is active.** **200** if enrichment flow is available (`finalize: 'after'`), **404** if not (`finalize: 'immediate'`). Use to detect whether the CorePass app should send enrichment. Do not use GET for this. No `X-Algorithm` header. |
+| **POST** | `/webauthn/data` | **Receive data from the application (CorePass) for verification.** Body + `X-Signature` (Ed448). Optional request header `X-Algorithm`; response includes `X-Algorithm` (see [Algorithm](#algorithm-for-post-webauthndata)). Verifies signature, applies options, stores profile, updates user email and passkey name. |
+| **POST** | `/webauthn/restore/init` | **Browser** starts passkey restore flow. **Available only when `finalize: 'after'`.** Returns `{ restoreId, expiresAt, signaturePath }`. |
 | **POST** | `/webauthn/restore` | **CorePass** sends Ed448-signed `{ coreId, restoreId, timestamp }`. Verifies signature, deletes old passkeys and sessions. |
 | **POST** | `/webauthn/restore/complete` | **Browser** polls/calls to exchange verified restoreId for a session cookie. Returns `{ ok: false, status: 'pending' }` while waiting, `{ ok: true, status: 'completed' }` when done. |
 
 **Profile (CorePass data)** is not a separate endpoint. The plugin extends the **official Better Auth get-session** response: call `getSession()` (client or server); when the user has an unexpired CorePass profile, `user.profile` is present with `coreId`, `o18y`, `o21y`, `kyc`, `kycDoc`, `backedUp`, `providedTill`. Type: `CorePassProfile` (exported from this package).
 
-## POST /passkey/data: payload and signature
+## POST /webauthn/data: payload and signature
 
 - **Body** (JSON): `coreId`, `credentialId`, `timestamp` (Unix **microseconds**), optional `userData`.
-- **Headers**: `X-Signature` (required, Ed448), optional `X-Public-Key` (57-byte key when using short-form Core ID).
+- **Headers**: `X-Signature` (required, Ed448), optional `X-Public-Key` (57-byte key when using short-form Core ID), optional `X-Algorithm` (see [Algorithm](#algorithm-for-post-webauthndata)).
 
 **Signature input** (what CorePass signs):
 
@@ -90,52 +92,42 @@ Path is **`/passkey/data`**. The **plugin owns this route**: in your app’s han
 "POST" + "\n" + signaturePath + "\n" + canonicalJsonBody
 ```
 
-- `signaturePath` defaults to `/passkey/data` (configurable via `signaturePath`).
+- `signaturePath` defaults to `/webauthn/data` (configurable via `signaturePath`).
 - `canonicalJsonBody`: object keys sorted alphabetically, JSON stringified with no extra whitespace.
+
+### Algorithm for POST /webauthn/data
+
+Signature verification is performed with **Ed448**; that is the only algorithm currently supported for the request body. The server does **not** return an algorithm header on **HEAD** `/webauthn/data`. On **POST** `/webauthn/data` only, the response includes an **`X-Algorithm`** header:
+
+- The client may send **`X-Algorithm`** in the request (e.g. `ed448` or `ed25519`). If the value is missing, empty, or not in the allowed set, the server uses **`ed448`**.
+- The response header **`X-Algorithm`** is set to that resolved value (request value if valid, otherwise `ed448`). Allowed values are currently **`ed448`** (case-insensitive). **Only ed448 is used for signature verification** at this time.
 
 **userData** (all optional): `email`, `o18y`, `o21y`, `kyc`, `kycDoc`, `dataExp` (minutes → stored as `providedTill`), `backedUp` (boolean: CorePass backed up, not passkey). Email: validated with regex (`local@domain.tld`, max 254 chars). Use `requireEmail` to require it in the payload only; `requireRegistrationEmail` to require the form email at registration; `requireAtLeastOneEmail` to require email from registration or enrichment (enrichment overwrites; non-verified registration email allowed). Core ID is validated as a Core (ICAN) address; invalid IDs or network not in `allowNetwork` cause the user and sessions to be deleted and **400** `CORE_ID_INVALID` or `CORE_ID_NETWORK_NOT_ALLOWED`. If `requireO18y` / `requireO21y` / `requireKyc` are set, the plugin rejects when the flag is not `true`. If `allowOnlyBackedUp` is true, `userData.backedUp` must be present and true or the plugin deletes the user and sessions and returns **400** `BACKED_UP_REQUIRED`. After signature verification, if data is invalid or any required check fails, the plugin **deletes that user and their sessions** and then returns an error.
 
 ## Passkey restore (lost phone / new device)
 
-When a user loses their passkey (phone lost, changed, or passkey accidentally deleted), they can prove identity via CorePass Ed448 signature and register a new passkey. No re-enrichment needed — the existing `corepass_profile` is preserved.
+When a user loses their passkey (phone lost, changed, or passkey accidentally deleted), they can prove identity via CorePass Ed448 signature and register a new passkey. No re-enrichment needed — the existing `corepass_profile` is preserved. **Restore is available only when `finalize: 'after'`** (recent behaviour: with `finalize: 'immediate'` the restore endpoints are not offered).
 
 ### Restore flow
 
-```
-Browser                          Backend                         CorePass
-   |                                |                               |
-   | 1. POST /webauthn/restore/init |                               |
-   |------------------------------->|                               |
-   |  { restoreId, signaturePath }  |                               |
-   |<-------------------------------|                               |
-   |                                |                               |
-   | 2. Show QR code with           |                               |
-   |    restoreId + signaturePath   |                               |
-   |                                |                               |
-   |                  3. User scans QR in CorePass                  |
-   |                                |                               |
-   |                                | 4. POST /webauthn/restore     |
-   |                                |   X-Signature: Ed448          |
-   |                                |   { coreId, restoreId,        |
-   |                                |     timestamp }               |
-   |                                |<------------------------------|
-   |                                |                               |
-   |                                | 5. Verify Ed448 signature     |
-   |                                | 6. Find user by coreId        |
-   |                                | 7. Delete old passkeys        |
-   |                                | 8. Delete old sessions        |
-   |                                | 9. Mark challenge verified    |
-   |                                |----> { ok: true }             |
-   |                                |                               |
-   | 10. POST /webauthn/restore/complete                            |
-   |------------------------------->|                               |
-   |                                | 11. Create session             |
-   |                                | 12. Set cookie                |
-   |   { ok: true, status: 'completed' }                            |
-   |<-------------------------------|                               |
-   |                                |                               |
-   | 13. Normal passkey registration flow (add new passkey)         |
-   | 14. No re-enrichment needed (corepass_profile already exists)  |
+```mermaid
+sequenceDiagram
+    participant Browser
+    participant Backend as Better Auth (corepass-passkey)
+    participant CorePass as CorePass app
+
+    Browser->>Backend: POST /webauthn/restore/init
+    Backend->>Browser: { restoreId, expiresAt, signaturePath }
+    Browser->>Browser: Show QR (restoreId + signaturePath)
+    Note over Browser,CorePass: User scans QR in CorePass
+    CorePass->>CorePass: Sign { coreId, restoreId, timestamp } (Ed448)
+    CorePass->>Backend: POST /webauthn/restore (X-Signature)
+    Backend->>Backend: Verify Ed448, find user by coreId, delete passkeys & sessions
+    Backend->>CorePass: { ok: true }
+    Browser->>Backend: POST /webauthn/restore/complete (poll)
+    Backend->>Browser: { ok: true, status: 'completed' } + session cookie
+    Browser->>Backend: Normal passkey registration (add new passkey)
+    Note over Browser,Backend: No re-enrichment; corepass_profile preserved
 ```
 
 ### Restore signature
@@ -182,7 +174,7 @@ Add restore paths to `handlePasskeyDataRoute` — it already handles `/webauthn/
        corepassPasskey({
          requireEmail: true,
          finalize: 'immediate', // or 'after' (default): user on hold until enrichment
-         signaturePath: '/passkey/data',
+         signaturePath: '/webauthn/data',
          timestampWindowMs: 600_000,
          requireO18y: false,
          requireO21y: false,
@@ -217,7 +209,7 @@ Add restore paths to `handlePasskeyDataRoute` — it already handles `/webauthn/
    });
    ```
 
-   Use **endpoint paths without basePath**: e.g. `/passkey/data`, not `/auth/passkey/data`. The auth router sees paths relative to itself, so the plugin matches `/passkey/data`. You only need to set `allowPasskeyRegistrationRoutes` if you use custom passkey paths; the default already allows the standard passkey plugin routes so registration and login work without extra config.
+   Use **endpoint paths without basePath**: e.g. `/webauthn/data`, not `/auth/webauthn/data`. The auth router sees paths relative to itself, so the plugin matches `/webauthn/data`. You only need to set `allowPasskeyRegistrationRoutes` if you use custom passkey paths; the default already allows the standard passkey plugin routes so registration and login work without extra config.
 
 3. Run migrations so the `corepass_profile` table exists (see [Schema](#schema)).
 
@@ -226,9 +218,9 @@ Add restore paths to `handlePasskeyDataRoute` — it already handles `/webauthn/
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `finalize` | `'immediate' \| 'after'` | `'after'` | When the user becomes active: `'immediate'` right after passkey registration; `'after'` when enrichment is received. |
-| `signaturePath` | `string` | `'/passkey/data'` | Path used when building the signature input string. |
+| `signaturePath` | `string` | `'/webauthn/data'` | Path used when building the signature input string. |
 | `timestampWindowMs` | `number` | `600_000` | Allowed clock skew for `timestamp` (microseconds). |
-| `requireEmail` | `boolean` | `false` | Require email **in enrichment payload only** (userData.email in POST /passkey/data). Validated by regex. On failure after signature verification, user and sessions are deleted. |
+| `requireEmail` | `boolean` | `false` | Require email **in enrichment payload only** (userData.email in POST /webauthn/data). Validated by regex. On failure after signature verification, user and sessions are deleted. |
 | `requireRegistrationEmail` | `boolean` | `false` | Require valid email in the **request body** of POST /sign-in/anonymous (e.g. `signIn.anonymous({ email })`) **before** the account is created. If missing or invalid, request is rejected (**400**). If user has passkey but still no valid email, account is cleaned and **403** `EMAIL_REQUIRED`. |
 | `requireAtLeastOneEmail` | `boolean` | `false` | Require email from at least one source: registration (form body) or enrichment. Enrichment overwrites when provided. All validated by regex. If neither provided, fail and clean (enrichment) or **403** and clean (access). |
 | `requireO18y` | `boolean` | `false` | Reject enrichment if `userData.o18y` is not true. On failure (after signature verification), the user and sessions are deleted. |
@@ -250,7 +242,7 @@ Only **anonymous registration** can be restarted: when a user with no passkey PO
 | --- | --- | --- |
 | `/sign-in/anonymous` | POST | **Restart registration** (anonymous only): delete current user/sessions so handler can create a new one. |
 | `/passkey/generate-register-options`, `/passkey/verify-registration` | POST | Allowed before passkey (passkey plugin). |
-| `/passkey/data` | HEAD, POST | HEAD = verify if active; POST = receive data from application (CorePass) for verification. |
+| `/webauthn/data` | HEAD, POST | HEAD = verify if active; POST = receive data from application (CorePass) for verification. |
 | `/get-session` | GET | Allowed (safe method). |
 
 Other paths (e.g. `/sign-up/email`, `/sign-in/email`, OAuth callbacks, `/sign-out`) are not restarted; if the user has no passkey they are blocked (or timeout) and the client should show "wait for expiration and retry" where applicable.
@@ -319,8 +311,8 @@ Minimal cases to verify the strict passkey-only flow:
 3. **After passkey registration → protected route allowed**
    With the same user now having one passkey, call the previously blocked endpoint. Expect **200** (or normal response).
 
-4. **Verify /passkey/data active → HEAD /passkey/data**
-   Call HEAD `/passkey/data`. With `finalize: 'after'` expect **200**; with `finalize: 'immediate'` expect **404**. Do not use enrichment for this.
+4. **Verify /webauthn/data active → HEAD /webauthn/data**
+   Call HEAD `/webauthn/data`. With `finalize: 'after'` expect **200**; with `finalize: 'immediate'` expect **404**. Do not use enrichment for this.
 
 ## References
 

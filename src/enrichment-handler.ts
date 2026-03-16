@@ -38,6 +38,17 @@ const enrichmentBodySchema = z.object({
 const DEFAULT_ENRICHMENT_PATH = '/webauthn/data';
 const DEFAULT_TIMESTAMP_WINDOW_MS = 600_000;
 
+const DEFAULT_ALGORITHM = 'ed448';
+const ALLOWED_ALGORITHMS = new Set(['ed448']);
+
+/** For POST /webauthn/data only: resolve algorithm from request X-Algorithm; if missing or not in allowed list, use ed448. */
+function getAlgorithmFromRequest(headers: Headers): string {
+	const raw = headers.get('X-Algorithm')?.trim();
+	if (!raw) return DEFAULT_ALGORITHM;
+	const lower = raw.toLowerCase();
+	return ALLOWED_ALGORITHMS.has(lower) ? lower : DEFAULT_ALGORITHM;
+}
+
 function toBool(v: boolean | number | undefined): boolean {
 	if (v === true || v === 1) return true;
 	if (v === false || v === 0) return false;
@@ -273,7 +284,11 @@ export function createEnrichmentEndpoint(options: CorePassPluginOptions) {
 				await failAndClean(apiErr);
 			}
 
-			return ctx.json({ ok: true }, { status: 200 });
+			const algorithm = getAlgorithmFromRequest(ctx.headers ?? new Headers());
+			return ctx.json(
+				{ ok: true },
+				{ status: 200, headers: { 'X-Algorithm': algorithm } }
+			);
 		}
 	);
 }
