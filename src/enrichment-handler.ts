@@ -163,6 +163,11 @@ export function createEnrichmentEndpoint(options: CorePassPluginOptions) {
 				const internal = ctx.context.internalAdapter as { deleteUser: (id: string) => Promise<unknown>; deleteSessions: (userId: string) => Promise<unknown> };
 				try {
 					await internal.deleteSessions(userId);
+					// Delete passkeys explicitly in case deleteUser doesn't cascade
+					await adapter.delete({
+						model: 'passkey',
+						where: [{ field: 'userId', value: userId }]
+					}).catch(() => {});
 					await internal.deleteUser(userId);
 				} catch (e) {
 					ctx.context.logger?.error?.('Failed to clean account after enrichment validation failure', e);
@@ -271,14 +276,32 @@ export function createEnrichmentEndpoint(options: CorePassPluginOptions) {
 				backedUp: toBool(data.backedUp) ? 1 : 0,
 				providedTill
 			};
+
+			// Check if this coreId is already linked to a DIFFERENT user (e.g. passkey was lost,
+			// user re-registered as new anonymous — old profile still exists for old userId).
+			// Return 409 so CorePass can detect this and suggest the restore flow instead.
+			const existingProfileByCoreId = await adapter.findOne({
+				model: 'corepass_profile',
+				where: [{ field: 'coreId', value: coreIdUpper }]
+			});
+			if (existingProfileByCoreId) {
+				const existingUserId = (existingProfileByCoreId as { userId: string }).userId;
+				if (existingUserId !== userId) {
+					await failAndClean(new APIError('CONFLICT' as 'BAD_REQUEST', {
+						message: 'This Core ID is already linked to another account. Use restore flow to recover access.',
+						code: 'CORE_ID_TAKEN'
+					}));
+				}
+			}
+
 			try {
 				await upsertCorePassProfile(ctx, profileUpdate);
 			} catch (err) {
 				const apiErr =
 					err instanceof APIError
 						? err
-						: new APIError('BAD_REQUEST', {
-								message: 'This Core ID is already linked to another account.',
+						: new APIError('CONFLICT' as 'BAD_REQUEST', {
+								message: 'This Core ID is already linked to another account. Use restore flow to recover access.',
 								code: 'CORE_ID_TAKEN'
 							});
 				await failAndClean(apiErr);
@@ -301,6 +324,7 @@ type Adapter = {
 		update: Record<string, unknown>;
 	}) => Promise<unknown>;
 	create: (arg: { model: string; data: Record<string, unknown> }) => Promise<unknown>;
+	delete: (arg: { model: string; where: { field: string; value: unknown }[] }) => Promise<void>;
 };
 
 async function upsertCorePassProfile(
