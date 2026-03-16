@@ -127,7 +127,7 @@ sequenceDiagram
     Browser->>Backend: POST /webauthn/restore/complete (poll)
     Backend->>Browser: { ok: true, status: 'completed' } + session cookie
     Browser->>Backend: Normal passkey registration (add new passkey)
-    Note over Browser,Backend: No re-enrichment; corepass_profile preserved
+    Note over Browser,Backend: No re-enrichment, corepass_profile preserved
 ```
 
 ### Restore signature
