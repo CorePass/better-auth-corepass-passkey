@@ -253,18 +253,43 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 			const basePath = (ctx.context.options?.basePath ?? '/api/auth').replace(/\/+$/, '') || '/';
 			const pathForAllow =
 				pathNorm === basePath ? '/' : pathNorm.startsWith(basePath + '/') ? pathNorm.slice(basePath.length) || '/' : pathNorm;
+
 			if (method.toUpperCase() !== 'POST' || pathForAllow !== RESTART_REGISTRATION_PATH) return;
-			const session = await getSessionFromCtx(ctx, { disableRefresh: true });
-			if (!session?.user?.id) return;
+
+			// Extract email from request body
 			const body = (ctx as { body?: { email?: string } }).body ?? {};
 			const email = typeof body.email === 'string' ? body.email.trim() : '';
 			if (!isValidEmail(email)) return;
+
+			// Try session from request first (restart case — user already has cookie)
+			let userId: string | null = null;
+			const session = await getSessionFromCtx(ctx, { disableRefresh: true });
+			if (session?.user?.id) {
+				userId = session.user.id;
+			}
+
+			// For NEW anonymous sign-in: no session cookie yet, read userId from response body
+			if (!userId) {
+				const returned = ctx.context.returned;
+				if (returned instanceof Response && returned.status === 200) {
+					try {
+						const data = await returned.clone().json() as { user?: { id?: string } };
+						if (data?.user?.id) userId = data.user.id;
+					} catch {}
+				} else if (typeof returned === 'object' && returned !== null && 'user' in returned) {
+					const data = returned as { user?: { id?: string } };
+					if (data?.user?.id) userId = data.user.id;
+				}
+			}
+
+			if (!userId) return;
+
 			const adapter = ctx.context.adapter as {
 				update: (arg: { model: string; where: { field: string; value: unknown }[]; update: Record<string, unknown> }) => Promise<unknown>;
 			};
 			await adapter.update({
 				model: 'user',
-				where: [{ field: 'id', value: session.user.id }],
+				where: [{ field: 'id', value: userId }],
 				update: { email }
 			});
 		})
