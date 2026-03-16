@@ -367,9 +367,15 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 		endpoints: {
 			passkeyDataHead: createHeadEnrichmentEndpoint(options),
 			passkeyData: createEnrichmentEndpoint(options),
-			restoreInit: createRestoreInitEndpoint(options),
-			restoreVerify: createRestoreVerifyEndpoint(options),
-			restoreComplete: createRestoreCompleteEndpoint(options)
+			// Restore endpoints require 'after' finalization (default) since they look up
+			// corepass_profile, which is only populated during enrichment via /webauthn/data.
+			...(options.finalize !== 'immediate'
+				? {
+						restoreInit: createRestoreInitEndpoint(options),
+						restoreVerify: createRestoreVerifyEndpoint(options),
+						restoreComplete: createRestoreCompleteEndpoint(options)
+					}
+				: {})
 		},
 		$ERROR_CODES: {
 			PASSKEY_REQUIRED: PASSKEY_REQUIRED_ERROR,
