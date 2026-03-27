@@ -224,6 +224,14 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 						if (isAllowedBeforePasskey(pathForAllow, method, gateOptions)) {
 							return;
 						}
+						// Always allow sign-out — user should be able to log out regardless of passkey state
+						if (pathForAllow === '/sign-out') {
+							return;
+						}
+						// Allow restore routes — user lost passkey, that's why they need restore
+						if (options.finalize === 'after' && pathForAllow.startsWith('/webauthn/restore')) {
+							return;
+						}
 						if (deleteAfterMs > 0) {
 							const userCreatedAt =
 								(session.user as { createdAt?: Date }).createdAt ??
