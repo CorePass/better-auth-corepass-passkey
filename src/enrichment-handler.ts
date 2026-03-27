@@ -149,10 +149,22 @@ export function createEnrichmentEndpoint(options: CorePassPluginOptions) {
 			}
 
 			const adapter = ctx.context.adapter as Adapter;
-			const passkey = await adapter.findOne({
+			let passkey = await adapter.findOne({
 				model: 'passkey',
 				where: [{ field: 'credentialID', value: credentialId }]
 			});
+			// Retry: CorePass may send enrichment before the WebAuthn ceremony
+			// has committed the passkey to the database (race condition).
+			if (!passkey) {
+				for (let attempt = 0; attempt < 5; attempt++) {
+					await new Promise((r) => setTimeout(r, 1000));
+					passkey = await adapter.findOne({
+						model: 'passkey',
+						where: [{ field: 'credentialID', value: credentialId }]
+					});
+					if (passkey) break;
+				}
+			}
 			if (!passkey) {
 				throw new APIError('NOT_FOUND', { message: 'Passkey not found for this credential.' });
 			}
