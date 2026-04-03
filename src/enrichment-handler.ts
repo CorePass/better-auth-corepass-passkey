@@ -244,9 +244,9 @@ export function createEnrichmentEndpoint(options: CorePassPluginOptions) {
 			const coreIdUpper = coreIdTrimmed.toUpperCase();
 			const rawEnrichmentEmail = typeof data.email === 'string' ? data.email.trim() : '';
 			const enrichmentEmailValue = isValidEmail(rawEnrichmentEmail) ? rawEnrichmentEmail : null;
-			const dataExpMinutes = typeof data.dataExp === 'number' ? data.dataExp : null;
+			const dataExpRaw = typeof data.dataExp === 'number' ? data.dataExp : null;
 			const providedTill =
-				dataExpMinutes != null ? Math.floor(Date.now() / 1000) + dataExpMinutes * 60 : null;
+				dataExpRaw != null ? Math.floor(dataExpRaw / 1000) : null;
 
 			await adapter.update({
 				model: 'passkey',
