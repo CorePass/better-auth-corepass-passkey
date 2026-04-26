@@ -14,7 +14,7 @@ import {
 	publicKeyFromCoreIdLongForm,
 	verifyEd448
 } from './utils/ed448.js';
-import { isValidEmail } from './utils/email.js';
+import { isValidEmail, isRealUserEmail } from './utils/email.js';
 import type { CorePassPluginOptions, EnrichmentBody, EnrichmentUserData } from './types.js';
 
 /** UUID v4 as 32 hex chars (no hyphens). */
@@ -171,6 +171,23 @@ export function createEnrichmentEndpoint(options: CorePassPluginOptions) {
 			const userId = (passkey as { userId: string }).userId;
 
 			const data = (userData ?? {}) as EnrichmentUserData;
+			// Temporary diagnostic: trace enrichment payload to pinpoint where o18y/o21y/kyc
+			// get lost between CorePass and the DB write (all rows currently persist 0).
+			// Remove once the mystery is resolved.
+			ctx.context.logger?.info?.('[corepass enrichment] received payload', {
+				coreId,
+				userDataKeys: userData ? Object.keys(userData) : [],
+				o18y: data.o18y,
+				o18yType: typeof data.o18y,
+				o21y: data.o21y,
+				o21yType: typeof data.o21y,
+				kyc: data.kyc,
+				kycType: typeof data.kyc,
+				backedUp: data.backedUp,
+				backedUpType: typeof data.backedUp,
+				dataExp: data.dataExp,
+				hasEmail: typeof data.email === 'string' && data.email.length > 0
+			});
 			const failAndClean = async (err: APIError) => {
 				const internal = ctx.context.internalAdapter as { deleteUser: (id: string) => Promise<unknown>; deleteSessions: (userId: string) => Promise<unknown> };
 				try {
@@ -259,7 +276,8 @@ export function createEnrichmentEndpoint(options: CorePassPluginOptions) {
 				where: [{ field: 'id', value: userId }]
 			})) as { email?: string | null } | null;
 			const rawRegistrationEmail = userBefore?.email?.trim() || null;
-			const registrationEmail = isValidEmail(rawRegistrationEmail) ? rawRegistrationEmail : null;
+			// Ignore the anonymous plugin's `temp@<id>.com` placeholder — it was not user-supplied.
+			const registrationEmail = isRealUserEmail(rawRegistrationEmail) ? rawRegistrationEmail : null;
 			const effectiveEmail = enrichmentEmailValue ?? registrationEmail;
 
 			const userUpdate: Record<string, unknown> = {
@@ -306,6 +324,7 @@ export function createEnrichmentEndpoint(options: CorePassPluginOptions) {
 				}
 			}
 
+			ctx.context.logger?.info?.('[corepass enrichment] upserting profile', profileUpdate);
 			try {
 				await upsertCorePassProfile(ctx, profileUpdate);
 			} catch (err) {

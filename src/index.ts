@@ -18,7 +18,7 @@ import {
 } from './restore-handler.js';
 import type { CorePassPluginOptions } from './types.js';
 import { hasAnyPasskey, isAllowedBeforePasskey } from './utils/passkey-state.js';
-import { isValidEmail } from './utils/email.js';
+import { isValidEmail, isRealUserEmail } from './utils/email.js';
 
 type AdapterFindOne = {
 	findOne: (arg: { model: string; where: { field: string; value: unknown }[] }) => Promise<unknown>;
@@ -127,6 +127,11 @@ const BACKED_UP_REQUIRED_ERROR = {
 	code: 'BACKED_UP_REQUIRED' as const
 };
 
+const ENRICHMENT_REQUIRED_ERROR = {
+	message: 'CorePass enrichment has not completed. Approve the identity request in CorePass, then retry.',
+	code: 'ENRICHMENT_REQUIRED' as const
+};
+
 /** Only anonymous registration can be restarted: POST /sign-in/anonymous. Sign-in (email, OAuth) is not reset; user must wait for expiration and retry. */
 const RESTART_REGISTRATION_PATH = '/sign-in/anonymous';
 
@@ -187,7 +192,9 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 						if (hasPasskey) {
 							const needEmail = options.requireRegistrationEmail || options.requireAtLeastOneEmail;
 							const userEmail = (session.user as { email?: string | null }).email;
-							if (needEmail && !isValidEmail(userEmail)) {
+							// Auto-generated `temp@<id>.com` emails must not satisfy requireAtLeastOneEmail —
+							// they are syntactically valid but were never supplied by the user.
+							if (needEmail && !isRealUserEmail(userEmail)) {
 								const internal = ctx.context.internalAdapter as { deleteUser: (id: string) => Promise<unknown>; deleteSessions: (userId: string) => Promise<unknown> };
 								try {
 									await internal.deleteSessions(session.user.id);
@@ -196,6 +203,29 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 									ctx.context.logger?.error?.('Failed to clean account: email required', err);
 								}
 								throw new APIError('FORBIDDEN', EMAIL_REQUIRED_ERROR);
+							}
+							// Enrichment-pending gate: with finalize='after', a passkey alone is not sufficient —
+							// CorePass must also have POSTed /webauthn/data, which creates an unexpired
+							// corepass_profile row. Without it we keep the session (so CorePass retry works)
+							// but block non-public routes the same way pre-passkey access is blocked.
+							if (options.finalize !== 'immediate') {
+								const profileRow = (await adapter.findOne({
+									model: 'corepass_profile',
+									where: [{ field: 'userId', value: session.user.id }]
+								})) as { providedTill?: number | null } | null;
+								const nowSec = Math.floor(Date.now() / 1000);
+								const enrichmentValid =
+									profileRow != null &&
+									(profileRow.providedTill == null || profileRow.providedTill >= nowSec);
+								if (!enrichmentValid) {
+									if (isAllowedBeforePasskey(pathForAllow, method, gateOptions)) return;
+									if (pathForAllow === '/sign-out') return;
+									if (pathForAllow === RESTART_REGISTRATION_PATH) return;
+									// Enrichment POST must be reachable so CorePass can still deliver the payload.
+									if (pathForAllow === '/webauthn/data') return;
+									if (pathForAllow.startsWith('/webauthn/restore')) return;
+									throw new APIError('FORBIDDEN', ENRICHMENT_REQUIRED_ERROR);
+								}
 							}
 							return;
 						}
@@ -417,6 +447,7 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 			CORE_ID_INVALID: CORE_ID_INVALID_ERROR,
 			CORE_ID_NETWORK_NOT_ALLOWED: CORE_ID_NETWORK_NOT_ALLOWED_ERROR,
 			BACKED_UP_REQUIRED: BACKED_UP_REQUIRED_ERROR,
+			ENRICHMENT_REQUIRED: ENRICHMENT_REQUIRED_ERROR,
 			CORE_ID_NOT_FOUND: { message: 'No account found for this Core ID.', code: 'CORE_ID_NOT_FOUND' as const },
 			RESTORE_CHALLENGE_NOT_FOUND: { message: 'Restore challenge not found.', code: 'RESTORE_CHALLENGE_NOT_FOUND' as const },
 			RESTORE_CHALLENGE_EXPIRED: { message: 'Restore challenge expired.', code: 'RESTORE_CHALLENGE_EXPIRED' as const },
