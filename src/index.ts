@@ -187,7 +187,10 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 							}
 							return;
 						}
-						const adapter = ctx.context.adapter as { findOne: (arg: { model: string; where: { field: string; value: unknown }[] }) => Promise<unknown> };
+						const adapter = ctx.context.adapter as {
+							findOne: (arg: { model: string; where: { field: string; value: unknown }[] }) => Promise<unknown>;
+							delete: (arg: { model: string; where: { field: string; value: unknown }[] }) => Promise<void>;
+						};
 						const hasPasskey = await hasAnyPasskey(adapter, session.user.id);
 						if (hasPasskey) {
 							const needEmail = options.requireRegistrationEmail || options.requireAtLeastOneEmail;
@@ -218,18 +221,103 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 									profileRow != null &&
 									(profileRow.providedTill == null || profileRow.providedTill >= nowSec);
 								if (!enrichmentValid) {
+									// Restart-registration: a passkey exists but enrichment never completed
+									// (or the profile expired). Wipe the stale account so the anonymous
+									// handler can create a fresh user — same semantics as the no-passkey
+									// branch below.
+									if (method.toUpperCase() === 'POST' && pathForAllow === RESTART_REGISTRATION_PATH) {
+										// Reject malformed emails before destructive cleanup, mirroring the no-session branch.
+										if (options.requireRegistrationEmail) {
+											const body = (ctx as { body?: { email?: string } }).body ?? {};
+											const email = typeof body.email === 'string' ? body.email.trim() : '';
+											if (!isValidEmail(email)) {
+												throw new APIError('BAD_REQUEST', {
+													message: 'requireRegistrationEmail: valid email is required in request body (e.g. signIn.anonymous({ email }))',
+													code: 'EMAIL_REQUIRED'
+												});
+											}
+										}
+										const internal = ctx.context.internalAdapter as {
+											deleteUser: (id: string) => Promise<unknown>;
+											deleteSessions: (userId: string) => Promise<unknown>;
+											deleteSession?: (token: string) => Promise<unknown>;
+										};
+										try {
+											const token = (session.session as { token?: string })?.token;
+											if (token && typeof internal.deleteSession === 'function') {
+												await internal.deleteSession(token);
+											}
+											await internal.deleteSessions(session.user.id);
+											await adapter.delete({
+												model: 'passkey',
+												where: [{ field: 'userId', value: session.user.id }]
+											}).catch(() => {});
+											if (profileRow != null) {
+												await adapter.delete({
+													model: 'corepass_profile',
+													where: [{ field: 'userId', value: session.user.id }]
+												}).catch(() => {});
+											}
+											await internal.deleteUser(session.user.id);
+										} catch (err) {
+											ctx.context.logger?.error?.('Failed to restart registration for passkey + stale enrichment', err);
+										}
+										(ctx as { context: { session?: unknown } }).context.session = undefined;
+										deleteSessionCookie(ctx);
+										return;
+									}
 									if (isAllowedBeforePasskey(pathForAllow, method, gateOptions)) return;
 									if (pathForAllow === '/sign-out') return;
-									if (pathForAllow === RESTART_REGISTRATION_PATH) return;
 									// Enrichment POST must be reachable so CorePass can still deliver the payload.
 									if (pathForAllow === '/webauthn/data') return;
 									if (pathForAllow.startsWith('/webauthn/restore')) return;
+									// Lazy auto-expire for stuck registrations: passkey created but
+									// enrichment never wrote a profile row. After deleteAfterMs since
+									// user.createdAt, wipe and force a fresh start. Expired profiles
+									// (providedTill < now) are kept so the user can re-enrich without
+									// losing identity.
+									if (deleteAfterMs > 0 && profileRow == null) {
+										const userCreatedAt =
+											(session.user as { createdAt?: Date }).createdAt ??
+											((await adapter.findOne({ model: 'user', where: [{ field: 'id', value: session.user.id }] })) as { createdAt?: Date } | null)?.createdAt;
+										const createdAtMs = userCreatedAt instanceof Date ? userCreatedAt.getTime() : userCreatedAt ? new Date(userCreatedAt).getTime() : 0;
+										if (createdAtMs > 0 && Date.now() - createdAtMs >= deleteAfterMs) {
+											const internal = ctx.context.internalAdapter as {
+												deleteUser: (id: string) => Promise<unknown>;
+												deleteSessions: (userId: string) => Promise<unknown>;
+											};
+											try {
+												await internal.deleteSessions(session.user.id);
+												await adapter.delete({
+													model: 'passkey',
+													where: [{ field: 'userId', value: session.user.id }]
+												}).catch(() => {});
+												await internal.deleteUser(session.user.id);
+											} catch (err) {
+												ctx.context.logger?.error?.('Failed to expire stuck registration (passkey + no profile)', err);
+											}
+											throw new APIError('FORBIDDEN', REGISTRATION_TIMEOUT_ERROR);
+										}
+									}
 									throw new APIError('FORBIDDEN', ENRICHMENT_REQUIRED_ERROR);
 								}
 							}
 							return;
 						}
 						if (method.toUpperCase() === 'POST' && pathForAllow === RESTART_REGISTRATION_PATH) {
+							// Match the no-session validation: if requireRegistrationEmail is set,
+							// reject before wiping the user so a malformed email can't trigger
+							// destructive cleanup.
+							if (options.requireRegistrationEmail) {
+								const body = (ctx as { body?: { email?: string } }).body ?? {};
+								const email = typeof body.email === 'string' ? body.email.trim() : '';
+								if (!isValidEmail(email)) {
+									throw new APIError('BAD_REQUEST', {
+										message: 'requireRegistrationEmail: valid email is required in request body (e.g. signIn.anonymous({ email }))',
+										code: 'EMAIL_REQUIRED'
+									});
+								}
+							}
 							const internal = ctx.context.internalAdapter as {
 								deleteUser: (id: string) => Promise<unknown>;
 								deleteSessions: (userId: string) => Promise<unknown>;
@@ -241,6 +329,12 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 									await internal.deleteSession(token);
 								}
 								await internal.deleteSessions(session.user.id);
+								// Drop any leftover corepass_profile so a re-enrichment with the
+								// same Core ID doesn't trip CORE_ID_TAKEN (e.g. after restore-cancel).
+								await adapter.delete({
+									model: 'corepass_profile',
+									where: [{ field: 'userId', value: session.user.id }]
+								}).catch(() => {});
 								await internal.deleteUser(session.user.id);
 							} catch (err) {
 								ctx.context.logger?.error?.('Failed to delete user for registration restart', err);
