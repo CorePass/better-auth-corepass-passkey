@@ -72,7 +72,7 @@ export type CorePassPluginOptions = {
 	supportedAlgorithmIDs?: number[] | false;
 	/**
 	 * AAGUID allowlist for passkey registration. Only these authenticator AAGUIDs are accepted.
-	 * Default: Core Pass AAGUID `636f7265-7061-7373-6964-656e74696679`. Use string (one), string[] (many), or false to allow any.
+	 * Default: Core Pass AAGUID `636f7265-7061-7373-6964-656e74697479`. Use string (one), string[] (many), or false to allow any.
 	 * Applied via passkey create.before database hook.
 	 */
 	allowedAaguids?: string | string[] | false;

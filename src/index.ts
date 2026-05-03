@@ -136,7 +136,7 @@ const ENRICHMENT_REQUIRED_ERROR = {
 const RESTART_REGISTRATION_PATH = '/sign-in/anonymous';
 
 /** Default AAGUID for Core Pass authenticator. Use allowedAaguids: false to allow any. */
-const DEFAULT_AAGUID = '636f7265-7061-7373-6964-656e74696679';
+const DEFAULT_AAGUID = '636f7265-7061-7373-6964-656e74697479';
 
 /**
  * Expanded COSE algorithm IDs for pubKeyCredParams, ordered by strongest cryptography first (authenticators often pick the first they support).
