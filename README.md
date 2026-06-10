@@ -203,6 +203,9 @@ Add restore paths to `handlePasskeyDataRoute` — it already handles `/webauthn/
        corepassPasskey({
          deleteAccountWithoutPasskeyAfterMs: 300_000,
          finalize: 'after',
+         onEnriched: async ({ userId, coreId, profile, ctx }) => {
+           // run app-specific activation logic here
+         },
          // ... other options
        }),
      ],
@@ -219,6 +222,7 @@ Add restore paths to `handlePasskeyDataRoute` — it already handles `/webauthn/
 | --- | --- | --- | --- |
 | `finalize` | `'immediate' \| 'after'` | `'after'` | When the user becomes active: `'immediate'` right after passkey registration; `'after'` when enrichment is received. |
 | `signaturePath` | `string` | `'/webauthn/data'` | Path used when building the signature input string. |
+| `onEnriched` | `(args) => Promise<void> \| void` | `undefined` | Called only after CorePass enrichment succeeds, required flags pass, user/passkey updates complete, and `corepass_profile` is persisted. Receives `{ userId, coreId, profile, user, passkey, ctx }`. |
 | `timestampWindowMs` | `number` | `600_000` | Allowed clock skew for `timestamp` (microseconds). |
 | `requireEmail` | `boolean` | `false` | Require email **in enrichment payload only** (userData.email in POST /webauthn/data). Validated by regex. On failure after signature verification, user and sessions are deleted. |
 | `requireRegistrationEmail` | `boolean` | `false` | Require valid email in the **request body** of POST /sign-in/anonymous (e.g. `signIn.anonymous({ email })`) **before** the account is created. If missing or invalid, request is rejected (**400**). If user has passkey but still no valid email, account is cleaned and **403** `EMAIL_REQUIRED`. |
