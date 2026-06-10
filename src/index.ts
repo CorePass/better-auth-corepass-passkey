@@ -198,7 +198,7 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 							// Auto-generated `temp@<id>.com` emails must not satisfy requireAtLeastOneEmail —
 							// they are syntactically valid but were never supplied by the user.
 							if (needEmail && !isRealUserEmail(userEmail)) {
-								const internal = ctx.context.internalAdapter as { deleteUser: (id: string) => Promise<unknown>; deleteSessions: (userId: string) => Promise<unknown> };
+								const internal = ctx.context.internalAdapter as unknown as { deleteUser: (id: string) => Promise<unknown>; deleteSessions: (userId: string) => Promise<unknown> };
 								try {
 									await internal.deleteSessions(session.user.id);
 									await internal.deleteUser(session.user.id);
@@ -237,7 +237,7 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 												});
 											}
 										}
-										const internal = ctx.context.internalAdapter as {
+										const internal = ctx.context.internalAdapter as unknown as {
 											deleteUser: (id: string) => Promise<unknown>;
 											deleteSessions: (userId: string) => Promise<unknown>;
 											deleteSession?: (token: string) => Promise<unknown>;
@@ -282,7 +282,7 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 											((await adapter.findOne({ model: 'user', where: [{ field: 'id', value: session.user.id }] })) as { createdAt?: Date } | null)?.createdAt;
 										const createdAtMs = userCreatedAt instanceof Date ? userCreatedAt.getTime() : userCreatedAt ? new Date(userCreatedAt).getTime() : 0;
 										if (createdAtMs > 0 && Date.now() - createdAtMs >= deleteAfterMs) {
-											const internal = ctx.context.internalAdapter as {
+											const internal = ctx.context.internalAdapter as unknown as {
 												deleteUser: (id: string) => Promise<unknown>;
 												deleteSessions: (userId: string) => Promise<unknown>;
 											};
@@ -318,7 +318,7 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 									});
 								}
 							}
-							const internal = ctx.context.internalAdapter as {
+							const internal = ctx.context.internalAdapter as unknown as {
 								deleteUser: (id: string) => Promise<unknown>;
 								deleteSessions: (userId: string) => Promise<unknown>;
 								deleteSession?: (token: string) => Promise<unknown>;
@@ -362,7 +362,7 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 								((await adapter.findOne({ model: 'user', where: [{ field: 'id', value: session.user.id }] })) as { createdAt?: Date } | null)?.createdAt;
 							const createdAtMs = userCreatedAt instanceof Date ? userCreatedAt.getTime() : userCreatedAt ? new Date(userCreatedAt).getTime() : 0;
 							if (createdAtMs > 0 && Date.now() - createdAtMs >= deleteAfterMs) {
-								const internal = ctx.context.internalAdapter as { deleteUser: (id: string) => Promise<unknown>; deleteSessions: (userId: string) => Promise<unknown> };
+								const internal = ctx.context.internalAdapter as unknown as { deleteUser: (id: string) => Promise<unknown>; deleteSessions: (userId: string) => Promise<unknown> };
 								try {
 									await internal.deleteSessions(session.user.id);
 									await internal.deleteUser(session.user.id);
