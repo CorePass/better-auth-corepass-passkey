@@ -15,7 +15,12 @@ import {
 	verifyEd448
 } from './utils/ed448.js';
 import { isValidEmail, isRealUserEmail } from './utils/email.js';
-import type { CorePassPluginOptions, EnrichmentBody, EnrichmentUserData } from './types.js';
+import type {
+	CorePassEnrichedLifecycleArgs,
+	CorePassPluginOptions,
+	EnrichmentBody,
+	EnrichmentUserData
+} from './types.js';
 
 /** UUID v4 as 32 hex chars (no hyphens). */
 const enrichmentBodySchema = z.object({
@@ -61,6 +66,29 @@ function coreIdToDisplayName(coreId: string): string {
 	const first4 = s.slice(0, 4).toUpperCase();
 	const last4 = s.slice(-4).toUpperCase();
 	return `${first4}…${last4}`;
+}
+
+export class EnrichmentProfileWriteError extends Error {
+	readonly cause: unknown;
+
+	constructor(cause: unknown) {
+		super('CorePass profile write failed.');
+		this.name = 'EnrichmentProfileWriteError';
+		this.cause = cause;
+	}
+}
+
+export async function runAfterEnrichmentProfileWrite(
+	options: CorePassPluginOptions,
+	args: CorePassEnrichedLifecycleArgs,
+	writeProfile: () => Promise<void> | void
+): Promise<void> {
+	try {
+		await writeProfile();
+	} catch (err) {
+		throw new EnrichmentProfileWriteError(err);
+	}
+	await options.onEnriched?.(args);
 }
 
 /** HEAD /webauthn/data: 200 if enrichment flow is available (finalize "after"), 404 if immediate. */
@@ -265,7 +293,7 @@ export function createEnrichmentEndpoint(options: CorePassPluginOptions) {
 			const providedTill =
 				dataExpRaw != null ? Math.floor(dataExpRaw / 1000) : null;
 
-			await adapter.update({
+			const updatedPasskey = await adapter.update({
 				model: 'passkey',
 				where: [{ field: 'id', value: (passkey as { id: string }).id }],
 				update: { name: coreIdUpper }
@@ -284,7 +312,7 @@ export function createEnrichmentEndpoint(options: CorePassPluginOptions) {
 				name: coreIdToDisplayName(coreId)
 			};
 			if (enrichmentEmailValue) userUpdate.email = enrichmentEmailValue;
-			await adapter.update({
+			const updatedUser = await adapter.update({
 				model: 'user',
 				where: [{ field: 'id', value: userId }],
 				update: userUpdate
@@ -326,11 +354,25 @@ export function createEnrichmentEndpoint(options: CorePassPluginOptions) {
 
 			ctx.context.logger?.info?.('[corepass enrichment] upserting profile', profileUpdate);
 			try {
-				await upsertCorePassProfile(ctx, profileUpdate);
+				await runAfterEnrichmentProfileWrite(
+					options,
+					{
+						userId,
+						coreId: coreIdUpper,
+						profile: profileUpdate,
+						user: updatedUser ?? userBefore,
+						passkey: updatedPasskey ?? passkey,
+						ctx
+					},
+					() => upsertCorePassProfile(ctx, profileUpdate)
+				);
 			} catch (err) {
+				if (!(err instanceof EnrichmentProfileWriteError)) {
+					throw err;
+				}
 				const apiErr =
-					err instanceof APIError
-						? err
+					err.cause instanceof APIError
+						? err.cause
 						: new APIError('CONFLICT' as 'BAD_REQUEST', {
 								message: 'This Core ID is already linked to another account. Use restore flow to recover access.',
 								code: 'CORE_ID_TAKEN'

@@ -33,6 +33,15 @@ export type EnrichmentBody = {
 	userData?: EnrichmentUserData;
 };
 
+export type CorePassEnrichedLifecycleArgs = {
+	userId: string;
+	coreId: string;
+	profile: unknown;
+	user?: unknown;
+	passkey?: unknown;
+	ctx: unknown;
+};
+
 export type CorePassPluginOptions = {
 	/** Require email in enrichment payload (userData.email) only. Default false. All emails validated by regex. */
 	requireEmail?: boolean;
@@ -44,6 +53,8 @@ export type CorePassPluginOptions = {
 	finalize?: 'immediate' | 'after';
 	/** Path used for signature verification. Default /webauthn/data. */
 	signaturePath?: string;
+	/** Called after enrichment succeeds, required flags pass, user/passkey updates complete, and corepass_profile is persisted. */
+	onEnriched?: (args: CorePassEnrichedLifecycleArgs) => Promise<void> | void;
 	/** Timestamp window (ms). Default 600000. */
 	timestampWindowMs?: number;
 	/** Reject enrichment if userData.o18y !== true. */
