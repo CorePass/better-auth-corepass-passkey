@@ -217,9 +217,9 @@ export function createEnrichmentEndpoint(options: CorePassPluginOptions) {
 				hasEmail: typeof data.email === 'string' && data.email.length > 0
 			});
 			const failAndClean = async (err: APIError) => {
-				const internal = ctx.context.internalAdapter as unknown as { deleteUser: (id: string) => Promise<unknown>; deleteSessions: (userId: string) => Promise<unknown> };
+				const internal = ctx.context.internalAdapter as unknown as { deleteUser: (id: string) => Promise<unknown>; deleteUserSessions: (userId: string) => Promise<unknown> };
 				try {
-					await internal.deleteSessions(userId);
+					await internal.deleteUserSessions(userId);
 					// Delete passkeys explicitly in case deleteUser doesn't cascade
 					await adapter.delete({
 						model: 'passkey',
