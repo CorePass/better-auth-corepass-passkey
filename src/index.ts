@@ -198,12 +198,32 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 							// Auto-generated `temp@<id>.com` emails must not satisfy requireAtLeastOneEmail —
 							// they are syntactically valid but were never supplied by the user.
 							if (needEmail && !isRealUserEmail(userEmail)) {
-								const internal = ctx.context.internalAdapter as unknown as { deleteUser: (id: string) => Promise<unknown>; deleteSessions: (userId: string) => Promise<unknown> };
+								const internal = ctx.context.internalAdapter as unknown as { deleteUser: (id: string) => Promise<unknown>; deleteUserSessions: (userId: string) => Promise<unknown> };
+								let cleaned = false;
 								try {
-									await internal.deleteSessions(session.user.id);
+									await internal.deleteUserSessions(session.user.id);
+									await adapter.delete({
+										model: 'passkey',
+										where: [{ field: 'userId', value: session.user.id }]
+									}).catch(() => {});
+									await adapter.delete({
+										model: 'corepass_profile',
+										where: [{ field: 'userId', value: session.user.id }]
+									}).catch(() => {});
 									await internal.deleteUser(session.user.id);
+									cleaned = true;
 								} catch (err) {
 									ctx.context.logger?.error?.('Failed to clean account: email required', err);
+								}
+								if (cleaned) {
+									(ctx as { context: { session?: unknown } }).context.session = undefined;
+									deleteSessionCookie(ctx);
+									if (
+										isAllowedBeforePasskey(pathForAllow, method, gateOptions) ||
+										pathForAllow === '/sign-out'
+									) {
+										return;
+									}
 								}
 								throw new APIError('FORBIDDEN', EMAIL_REQUIRED_ERROR);
 							}
@@ -239,7 +259,7 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 										}
 										const internal = ctx.context.internalAdapter as unknown as {
 											deleteUser: (id: string) => Promise<unknown>;
-											deleteSessions: (userId: string) => Promise<unknown>;
+											deleteUserSessions: (userId: string) => Promise<unknown>;
 											deleteSession?: (token: string) => Promise<unknown>;
 										};
 										try {
@@ -247,7 +267,7 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 											if (token && typeof internal.deleteSession === 'function') {
 												await internal.deleteSession(token);
 											}
-											await internal.deleteSessions(session.user.id);
+											await internal.deleteUserSessions(session.user.id);
 											await adapter.delete({
 												model: 'passkey',
 												where: [{ field: 'userId', value: session.user.id }]
@@ -284,10 +304,10 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 										if (createdAtMs > 0 && Date.now() - createdAtMs >= deleteAfterMs) {
 											const internal = ctx.context.internalAdapter as unknown as {
 												deleteUser: (id: string) => Promise<unknown>;
-												deleteSessions: (userId: string) => Promise<unknown>;
+												deleteUserSessions: (userId: string) => Promise<unknown>;
 											};
 											try {
-												await internal.deleteSessions(session.user.id);
+												await internal.deleteUserSessions(session.user.id);
 												await adapter.delete({
 													model: 'passkey',
 													where: [{ field: 'userId', value: session.user.id }]
@@ -320,7 +340,7 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 							}
 							const internal = ctx.context.internalAdapter as unknown as {
 								deleteUser: (id: string) => Promise<unknown>;
-								deleteSessions: (userId: string) => Promise<unknown>;
+								deleteUserSessions: (userId: string) => Promise<unknown>;
 								deleteSession?: (token: string) => Promise<unknown>;
 							};
 							try {
@@ -328,7 +348,7 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 								if (token && typeof internal.deleteSession === 'function') {
 									await internal.deleteSession(token);
 								}
-								await internal.deleteSessions(session.user.id);
+								await internal.deleteUserSessions(session.user.id);
 								// Drop any leftover corepass_profile so a re-enrichment with the
 								// same Core ID doesn't trip CORE_ID_TAKEN (e.g. after restore-cancel).
 								await adapter.delete({
@@ -362,9 +382,9 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 								((await adapter.findOne({ model: 'user', where: [{ field: 'id', value: session.user.id }] })) as { createdAt?: Date } | null)?.createdAt;
 							const createdAtMs = userCreatedAt instanceof Date ? userCreatedAt.getTime() : userCreatedAt ? new Date(userCreatedAt).getTime() : 0;
 							if (createdAtMs > 0 && Date.now() - createdAtMs >= deleteAfterMs) {
-								const internal = ctx.context.internalAdapter as unknown as { deleteUser: (id: string) => Promise<unknown>; deleteSessions: (userId: string) => Promise<unknown> };
+								const internal = ctx.context.internalAdapter as unknown as { deleteUser: (id: string) => Promise<unknown>; deleteUserSessions: (userId: string) => Promise<unknown> };
 								try {
-									await internal.deleteSessions(session.user.id);
+									await internal.deleteUserSessions(session.user.id);
 									await internal.deleteUser(session.user.id);
 								} catch (err) {
 									ctx.context.logger?.error?.('Failed to delete account without passkey', err);

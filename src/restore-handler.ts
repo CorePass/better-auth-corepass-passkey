@@ -37,8 +37,8 @@ type Adapter = {
 	delete: (arg: { model: string; where: { field: string; value: unknown }[] }) => Promise<void>;
 };
 
-type InternalAdapterDeleteSessions = {
-	deleteSessions: (userId: string) => Promise<unknown>;
+type InternalAdapterDeleteUserSessions = {
+	deleteUserSessions: (userId: string) => Promise<unknown>;
 };
 
 type InternalAdapterCreateSession = {
@@ -47,7 +47,7 @@ type InternalAdapterCreateSession = {
 		request?: Request,
 		dontRememberMe?: boolean
 	) => Promise<unknown>;
-	deleteSessions: (userId: string) => Promise<unknown>;
+	deleteUserSessions: (userId: string) => Promise<unknown>;
 };
 
 /**
@@ -242,9 +242,9 @@ export function createRestoreVerifyEndpoint(options: CorePassPluginOptions) {
 			}
 
 			// Delete all old sessions
-			const internal = ctx.context.internalAdapter as unknown as InternalAdapterDeleteSessions;
+			const internal = ctx.context.internalAdapter as unknown as InternalAdapterDeleteUserSessions;
 			try {
-				await internal.deleteSessions(userId);
+				await internal.deleteUserSessions(userId);
 			} catch (err) {
 				ctx.context.logger?.error?.('Failed to delete old sessions during restore', err);
 			}
