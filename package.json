@@ -30,8 +30,8 @@
 		"zod": "^4.4.3"
 	},
 	"devDependencies": {
-		"@better-auth/passkey": "^1.6.16",
-		"better-auth": "^1.6.16",
-		"typescript": "^6.0.3"
+		"@better-auth/passkey": "^1.6.23",
+		"better-auth": "^1.6.23",
+		"typescript": "^7.0.2"
 	}
 }
