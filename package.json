@@ -1,6 +1,6 @@
 {
 	"name": "better-auth-corepass-passkey",
-	"version": "0.1.24",
+	"version": "0.1.25",
 	"description": "Better Auth plugin: CorePass Client with passkey support",
 	"license": "MIT",
 	"repository": {
@@ -21,8 +21,8 @@
 		"prepublishOnly": "npm run build"
 	},
 	"peerDependencies": {
-		"better-auth": ">=1.0.0",
-		"@better-auth/passkey": ">=1.0.0"
+		"better-auth": ">=1.6.13",
+		"@better-auth/passkey": ">=1.6.13"
 	},
 	"dependencies": {
 		"@noble/curves": "^2.2.0",
