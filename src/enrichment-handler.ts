@@ -335,9 +335,16 @@ export function createEnrichmentEndpoint(options: CorePassPluginOptions) {
 				providedTill
 			};
 
-			// Check if this coreId is already linked to a DIFFERENT user (e.g. passkey was lost,
-			// user re-registered as new anonymous — old profile still exists for old userId).
-			// Return 409 so CorePass can detect this and suggest the restore flow instead.
+			// This coreId may already be linked to a DIFFERENT user. Two cases:
+			//  1. The prior binding is an ORPHAN from an incomplete registration — its user
+			//     still carries the anonymous `temp@<id>.com` placeholder (never enriched with
+			//     a real email). Because THIS enrichment is Ed448-signed by the coreId's owner,
+			//     ownership is cryptographically proven, so it is safe to reclaim the coreId:
+			//     delete the orphan and let this registration bind it. This self-heals users
+			//     whose first attempt half-completed (profile written, email never set).
+			//  2. The prior binding is a REAL account (genuine, user-supplied email). That is a
+			//     legitimate existing account — do NOT silently take it over here; return 409 so
+			//     CorePass surfaces the explicit Restore flow (which revokes old devices on intent).
 			const existingProfileByCoreId = await adapter.findOne({
 				model: 'corepass_profile',
 				where: [{ field: 'coreId', value: coreIdUpper }]
@@ -345,10 +352,45 @@ export function createEnrichmentEndpoint(options: CorePassPluginOptions) {
 			if (existingProfileByCoreId) {
 				const existingUserId = (existingProfileByCoreId as { userId: string }).userId;
 				if (existingUserId !== userId) {
-					await failAndClean(new APIError('CONFLICT' as 'BAD_REQUEST', {
-						message: 'This Core ID is already linked to another account. Use restore flow to recover access.',
-						code: 'CORE_ID_TAKEN'
-					}));
+					const existingUser = (await adapter.findOne({
+						model: 'user',
+						where: [{ field: 'id', value: existingUserId }]
+					})) as { email?: string | null } | null;
+					const existingHasRealEmail = isRealUserEmail(existingUser?.email?.trim() || null);
+					if (existingHasRealEmail) {
+						await failAndClean(new APIError('CONFLICT' as 'BAD_REQUEST', {
+							message: 'This Core ID is already linked to another account. Use restore flow to recover access.',
+							code: 'CORE_ID_TAKEN'
+						}));
+					} else {
+						// Reclaim the coreId from the orphaned prior registration.
+						ctx.context.logger?.info?.('[corepass enrichment] reclaiming coreId from orphaned account', {
+							coreId: coreIdUpper,
+							orphanUserId: existingUserId
+						});
+						const internalReclaim = ctx.context.internalAdapter as unknown as {
+							deleteUser: (id: string) => Promise<unknown>;
+							deleteUserSessions: (userId: string) => Promise<unknown>;
+						};
+						try {
+							await internalReclaim.deleteUserSessions(existingUserId);
+						} catch (e) {
+							ctx.context.logger?.error?.('reclaim: failed to delete orphan sessions', e);
+						}
+						await adapter.delete({
+							model: 'passkey',
+							where: [{ field: 'userId', value: existingUserId }]
+						}).catch(() => {});
+						await adapter.delete({
+							model: 'corepass_profile',
+							where: [{ field: 'userId', value: existingUserId }]
+						}).catch(() => {});
+						try {
+							await internalReclaim.deleteUser(existingUserId);
+						} catch (e) {
+							ctx.context.logger?.error?.('reclaim: failed to delete orphan user', e);
+						}
+					}
 				}
 			}
 
