@@ -199,23 +199,6 @@ export function createEnrichmentEndpoint(options: CorePassPluginOptions) {
 			const userId = (passkey as { userId: string }).userId;
 
 			const data = (userData ?? {}) as EnrichmentUserData;
-			// Temporary diagnostic: trace enrichment payload to pinpoint where o18y/o21y/kyc
-			// get lost between CorePass and the DB write (all rows currently persist 0).
-			// Remove once the mystery is resolved.
-			ctx.context.logger?.info?.('[corepass enrichment] received payload', {
-				coreId,
-				userDataKeys: userData ? Object.keys(userData) : [],
-				o18y: data.o18y,
-				o18yType: typeof data.o18y,
-				o21y: data.o21y,
-				o21yType: typeof data.o21y,
-				kyc: data.kyc,
-				kycType: typeof data.kyc,
-				backedUp: data.backedUp,
-				backedUpType: typeof data.backedUp,
-				dataExp: data.dataExp,
-				hasEmail: typeof data.email === 'string' && data.email.length > 0
-			});
 			const failAndClean = async (err: APIError) => {
 				const internal = ctx.context.internalAdapter as unknown as { deleteUser: (id: string) => Promise<unknown>; deleteUserSessions: (userId: string) => Promise<unknown> };
 				try {
@@ -363,8 +346,10 @@ export function createEnrichmentEndpoint(options: CorePassPluginOptions) {
 							code: 'CORE_ID_TAKEN'
 						}));
 					} else {
-						// Reclaim the coreId from the orphaned prior registration.
-						ctx.context.logger?.info?.('[corepass enrichment] reclaiming coreId from orphaned account', {
+						// Reclaim the coreId from the orphaned prior registration. Logged at
+						// `warn` (not info) so this account-deletion is visible at the default
+						// log level without a host-app override.
+						ctx.context.logger?.warn?.('[corepass enrichment] reclaiming coreId from orphaned account', {
 							coreId: coreIdUpper,
 							orphanUserId: existingUserId
 						});
@@ -394,7 +379,6 @@ export function createEnrichmentEndpoint(options: CorePassPluginOptions) {
 				}
 			}
 
-			ctx.context.logger?.info?.('[corepass enrichment] upserting profile', profileUpdate);
 			try {
 				await runAfterEnrichmentProfileWrite(
 					options,
