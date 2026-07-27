@@ -1,6 +1,6 @@
 {
 	"name": "better-auth-corepass-passkey",
-	"version": "0.1.28",
+	"version": "0.1.29",
 	"description": "Better Auth plugin: CorePass Client with passkey support",
 	"license": "MIT",
 	"repository": {
@@ -11,11 +11,22 @@
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",
 	"exports": {
-		".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
-		"./client": { "types": "./dist/client.d.ts", "default": "./dist/client.js" },
-		"./passkey-data-route": { "types": "./dist/passkey-data-route.d.ts", "default": "./dist/passkey-data-route.js" }
+		".": {
+			"types": "./dist/index.d.ts",
+			"default": "./dist/index.js"
+		},
+		"./client": {
+			"types": "./dist/client.d.ts",
+			"default": "./dist/client.js"
+		},
+		"./passkey-data-route": {
+			"types": "./dist/passkey-data-route.d.ts",
+			"default": "./dist/passkey-data-route.js"
+		}
 	},
-	"files": ["dist"],
+	"files": [
+		"dist"
+	],
 	"scripts": {
 		"build": "tsc",
 		"prepublishOnly": "npm run build"
@@ -30,8 +41,8 @@
 		"zod": "^4.4.3"
 	},
 	"devDependencies": {
-		"@better-auth/passkey": "^1.6.23",
-		"better-auth": "^1.6.23",
+		"@better-auth/passkey": "^1.6.25",
+		"better-auth": "^1.6.25",
 		"typescript": "^7.0.2"
 	}
 }

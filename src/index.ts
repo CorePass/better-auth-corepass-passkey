@@ -24,6 +24,59 @@ type AdapterFindOne = {
 	findOne: (arg: { model: string; where: { field: string; value: unknown }[] }) => Promise<unknown>;
 };
 
+type CleanupAdapter = {
+	delete: (arg: { model: string; where: { field: string; value: unknown }[] }) => Promise<unknown>;
+	deleteMany: (arg: { model: string; where: { field: string; value: unknown }[] }) => Promise<unknown>;
+};
+
+type CleanupContext = {
+	context: {
+		adapter: CleanupAdapter;
+		internalAdapter: {
+			deleteSession?: (token: string) => Promise<unknown>;
+			deleteUserSessions: (userId: string) => Promise<unknown>;
+		};
+		logger?: {
+			error?: (message: string, error?: unknown) => void;
+		};
+	};
+};
+
+async function cleanRegistrationAccount(
+	ctx: CleanupContext,
+	userId: string,
+	sessionToken?: string
+): Promise<void> {
+	const adapter = ctx.context.adapter;
+	const internal = ctx.context.internalAdapter;
+
+	// Keep secondary session storage in sync when it is configured. Database rows
+	// are also removed explicitly below so recovery does not depend on Better
+	// Auth's cascading user cleanup or adapter-specific relation handling.
+	if (sessionToken && typeof internal.deleteSession === 'function') {
+		try {
+			await internal.deleteSession(sessionToken);
+		} catch (error) {
+			ctx.context.logger?.error?.('Failed to delete active registration session', error);
+		}
+	}
+	try {
+		await internal.deleteUserSessions(userId);
+	} catch (error) {
+		ctx.context.logger?.error?.('Failed to delete registration sessions from secondary storage', error);
+	}
+
+	const whereUserId = [{ field: 'userId', value: userId }];
+	for (const model of ['session', 'passkey', 'corepass_profile', 'account', 'restore_challenge']) {
+		await adapter.deleteMany({ model, where: whereUserId }).catch(() => {});
+	}
+
+	await adapter.delete({
+		model: 'user',
+		where: [{ field: 'id', value: userId }]
+	});
+}
+
 function normalizeAaguid(value: string): string {
 	return String(value).toLowerCase().replace(/\s+/g, '').trim();
 }
@@ -198,19 +251,13 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 							// Auto-generated `temp@<id>.com` emails must not satisfy requireAtLeastOneEmail —
 							// they are syntactically valid but were never supplied by the user.
 							if (needEmail && !isRealUserEmail(userEmail)) {
-								const internal = ctx.context.internalAdapter as unknown as { deleteUser: (id: string) => Promise<unknown>; deleteUserSessions: (userId: string) => Promise<unknown> };
 								let cleaned = false;
 								try {
-									await internal.deleteUserSessions(session.user.id);
-									await adapter.delete({
-										model: 'passkey',
-										where: [{ field: 'userId', value: session.user.id }]
-									}).catch(() => {});
-									await adapter.delete({
-										model: 'corepass_profile',
-										where: [{ field: 'userId', value: session.user.id }]
-									}).catch(() => {});
-									await internal.deleteUser(session.user.id);
+									await cleanRegistrationAccount(
+										ctx as unknown as CleanupContext,
+										session.user.id,
+										(session.session as { token?: string }).token
+									);
 									cleaned = true;
 								} catch (err) {
 									ctx.context.logger?.error?.('Failed to clean account: email required', err);
@@ -257,28 +304,13 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 												});
 											}
 										}
-										const internal = ctx.context.internalAdapter as unknown as {
-											deleteUser: (id: string) => Promise<unknown>;
-											deleteUserSessions: (userId: string) => Promise<unknown>;
-											deleteSession?: (token: string) => Promise<unknown>;
-										};
 										try {
 											const token = (session.session as { token?: string })?.token;
-											if (token && typeof internal.deleteSession === 'function') {
-												await internal.deleteSession(token);
-											}
-											await internal.deleteUserSessions(session.user.id);
-											await adapter.delete({
-												model: 'passkey',
-												where: [{ field: 'userId', value: session.user.id }]
-											}).catch(() => {});
-											if (profileRow != null) {
-												await adapter.delete({
-													model: 'corepass_profile',
-													where: [{ field: 'userId', value: session.user.id }]
-												}).catch(() => {});
-											}
-											await internal.deleteUser(session.user.id);
+											await cleanRegistrationAccount(
+												ctx as unknown as CleanupContext,
+												session.user.id,
+												token
+											);
 										} catch (err) {
 											ctx.context.logger?.error?.('Failed to restart registration for passkey + stale enrichment', err);
 										}
@@ -302,17 +334,12 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 											((await adapter.findOne({ model: 'user', where: [{ field: 'id', value: session.user.id }] })) as { createdAt?: Date } | null)?.createdAt;
 										const createdAtMs = userCreatedAt instanceof Date ? userCreatedAt.getTime() : userCreatedAt ? new Date(userCreatedAt).getTime() : 0;
 										if (createdAtMs > 0 && Date.now() - createdAtMs >= deleteAfterMs) {
-											const internal = ctx.context.internalAdapter as unknown as {
-												deleteUser: (id: string) => Promise<unknown>;
-												deleteUserSessions: (userId: string) => Promise<unknown>;
-											};
 											try {
-												await internal.deleteUserSessions(session.user.id);
-												await adapter.delete({
-													model: 'passkey',
-													where: [{ field: 'userId', value: session.user.id }]
-												}).catch(() => {});
-												await internal.deleteUser(session.user.id);
+												await cleanRegistrationAccount(
+													ctx as unknown as CleanupContext,
+													session.user.id,
+													(session.session as { token?: string }).token
+												);
 											} catch (err) {
 												ctx.context.logger?.error?.('Failed to expire stuck registration (passkey + no profile)', err);
 											}
@@ -338,24 +365,13 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 									});
 								}
 							}
-							const internal = ctx.context.internalAdapter as unknown as {
-								deleteUser: (id: string) => Promise<unknown>;
-								deleteUserSessions: (userId: string) => Promise<unknown>;
-								deleteSession?: (token: string) => Promise<unknown>;
-							};
 							try {
 								const token = (session.session as { token?: string })?.token;
-								if (token && typeof internal.deleteSession === 'function') {
-									await internal.deleteSession(token);
-								}
-								await internal.deleteUserSessions(session.user.id);
-								// Drop any leftover corepass_profile so a re-enrichment with the
-								// same Core ID doesn't trip CORE_ID_TAKEN (e.g. after restore-cancel).
-								await adapter.delete({
-									model: 'corepass_profile',
-									where: [{ field: 'userId', value: session.user.id }]
-								}).catch(() => {});
-								await internal.deleteUser(session.user.id);
+								await cleanRegistrationAccount(
+									ctx as unknown as CleanupContext,
+									session.user.id,
+									token
+								);
 							} catch (err) {
 								ctx.context.logger?.error?.('Failed to delete user for registration restart', err);
 							}
@@ -382,10 +398,12 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 								((await adapter.findOne({ model: 'user', where: [{ field: 'id', value: session.user.id }] })) as { createdAt?: Date } | null)?.createdAt;
 							const createdAtMs = userCreatedAt instanceof Date ? userCreatedAt.getTime() : userCreatedAt ? new Date(userCreatedAt).getTime() : 0;
 							if (createdAtMs > 0 && Date.now() - createdAtMs >= deleteAfterMs) {
-								const internal = ctx.context.internalAdapter as unknown as { deleteUser: (id: string) => Promise<unknown>; deleteUserSessions: (userId: string) => Promise<unknown> };
 								try {
-									await internal.deleteUserSessions(session.user.id);
-									await internal.deleteUser(session.user.id);
+									await cleanRegistrationAccount(
+										ctx as unknown as CleanupContext,
+										session.user.id,
+										(session.session as { token?: string }).token
+									);
 								} catch (err) {
 									ctx.context.logger?.error?.('Failed to delete account without passkey', err);
 								}
