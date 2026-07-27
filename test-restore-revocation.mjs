@@ -21,6 +21,7 @@ import { anonymous } from 'better-auth/plugins';
 import { passkey } from '@better-auth/passkey';
 import { memoryAdapter } from 'better-auth/adapters/memory';
 import { corepassPasskey } from './dist/index.js';
+import { readFileSync } from 'node:fs';
 
 let failed = 0;
 const ok = (c, n) => { console.log(c ? '\x1b[32m✓\x1b[0m' : '\x1b[31m✗\x1b[0m', n); if (!c) failed++; };
@@ -222,6 +223,82 @@ console.log('\n── E: AAGUID allowlist is enforced ──');
 	}
 	ok(threw != null, 'disallowed AAGUID is rejected');
 	ok(!db.passkey.some((p) => p.credentialID === 'bad-cred'), 'disallowed credential row is removed');
+}
+
+
+console.log('\n── F: enrichment when the email already belongs to the prior account ──');
+{
+	// Reproduces the production failure. `user.email` is UNIQUE in the real schema, so when
+	// the Core ID's previous owner still holds the address, updating user.email threw a raw
+	// constraint error: CorePass got a bare 500 ("unable to provide needed information"),
+	// the CORE_ID_TAKEN path never ran, and a half-registered user + passkey were orphaned.
+	// The memory adapter has no constraints, so uniqueness is enforced here explicitly.
+	const { auth, db } = build({ requireAtLeastOneEmail: true });
+	const ctx = await auth.$context;
+
+	const realUpdate = ctx.adapter.update.bind(ctx.adapter);
+	ctx.adapter.update = async (arg) => {
+		if (arg.model === 'user' && typeof arg.update?.email === 'string') {
+			const id = arg.where.find((w) => w.field === 'id')?.value;
+			if (db.user.some((u) => u.email === arg.update.email && u.id !== id)) {
+				throw new Error('UNIQUE constraint failed: user.email');
+			}
+		}
+		return realUpdate(arg);
+	};
+
+	// Prior, fully-real account owning both the Core ID and the email.
+	const prior = await ctx.internalAdapter.createUser({
+		email: 'owner@wall.money', emailVerified: false, isAnonymous: true,
+		name: 'CB40…B239', createdAt: new Date(), updatedAt: new Date()
+	});
+	await ctx.adapter.create({ model: 'corepass_profile', data: {
+		userId: prior.id, coreId: COREID, o18y: 1, o21y: 1, kyc: 1,
+		kycDoc: null, backedUp: 0, providedTill: null
+	}});
+
+	// A fresh registration by the same person: new anon user + freshly created passkey.
+	const fresh = await ctx.internalAdapter.createUser({
+		email: 'temp@fresh000000000000000000000.com', emailVerified: false, isAnonymous: true,
+		name: 'Anonymous', createdAt: new Date(), updatedAt: new Date()
+	});
+	const credentialId = 'fresh-credential-id';
+	await ctx.adapter.create({ model: 'passkey', data: {
+		userId: fresh.id, credentialID: credentialId, publicKey: 'pk', counter: 0,
+		deviceType: 'multiDevice', backedUp: true, transports: 'internal',
+		aaguid: AAGUID, createdAt: new Date(), name: 'Wall Money'
+	}});
+
+	// CorePass posts the signed enrichment, carrying the email it holds for this Core ID.
+	const { ed448 } = await import('@noble/curves/ed448.js');
+	const priv = ed448.utils.randomSecretKey ? ed448.utils.randomSecretKey() : ed448.utils.randomPrivateKey();
+	const pub = ed448.getPublicKey(priv);
+	const hex = (b) => Buffer.from(b).toString('hex');
+	const payload = {
+		coreId: COREID, credentialId, timestamp: Date.now() * 1000,
+		userData: { email: 'owner@wall.money', o18y: true, o21y: true, kyc: true }
+	};
+	const canonical = JSON.stringify({
+		coreId: payload.coreId, credentialId: payload.credentialId, timestamp: payload.timestamp,
+		userData: { email: payload.userData.email, kyc: payload.userData.kyc, o18y: payload.userData.o18y, o21y: payload.userData.o21y }
+	});
+	const sig = ed448.sign(new TextEncoder().encode(`POST\n/webauthn/data\n${canonical}`), priv);
+
+	const res = await auth.handler(new Request('http://localhost/auth/webauthn/data', {
+		method: 'POST',
+		headers: {
+			'Content-Type': 'application/json', Origin: 'http://localhost',
+			'X-Signature': hex(sig), 'X-Public-Key': hex(pub)
+		},
+		body: JSON.stringify(payload)
+	}));
+	const body = await res.json().catch(() => ({}));
+
+	ok(res.status !== 500, `no raw 500 to CorePass (got ${res.status})`);
+	ok(body?.code === 'CORE_ID_TAKEN', `actionable code returned (got ${JSON.stringify(body?.code)})`);
+	ok(!db.user.some((u) => u.id === fresh.id), 'the half-registered user is cleaned up, not orphaned');
+	ok(!db.passkey.some((p) => p.credentialID === credentialId), 'its passkey is cleaned up too');
+	ok(db.user.some((u) => u.id === prior.id), 'the existing real account is untouched');
 }
 
 console.log(`\n${failed === 0 ? '\x1b[32mall passed\x1b[0m' : `\x1b[31m${failed} failed\x1b[0m`}`);

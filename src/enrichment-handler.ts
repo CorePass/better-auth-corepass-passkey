@@ -291,33 +291,11 @@ export function createEnrichmentEndpoint(options: CorePassPluginOptions) {
 			const registrationEmail = isRealUserEmail(rawRegistrationEmail) ? rawRegistrationEmail : null;
 			const effectiveEmail = enrichmentEmailValue ?? registrationEmail;
 
-			const userUpdate: Record<string, unknown> = {
-				name: coreIdToDisplayName(coreId)
-			};
-			if (enrichmentEmailValue) userUpdate.email = enrichmentEmailValue;
-			const updatedUser = await adapter.update({
-				model: 'user',
-				where: [{ field: 'id', value: userId }],
-				update: userUpdate
-			});
-
-			if (options.requireAtLeastOneEmail && !isValidEmail(effectiveEmail)) {
-				await failAndClean(new APIError('BAD_REQUEST', {
-					message: 'Registration requires a valid email address.'
-				}));
-			}
-
-			const profileUpdate = {
-				userId,
-				coreId: coreIdUpper,
-				o18y: toBool(data.o18y) ? 1 : 0,
-				o21y: toBool(data.o21y) ? 1 : 0,
-				kyc: toBool(data.kyc) ? 1 : 0,
-				kycDoc: data.kycDoc ?? null,
-				backedUp: toBool(data.backedUp) ? 1 : 0,
-				providedTill
-			};
-
+			// Resolve Core ID ownership BEFORE writing user.email. `user.email` is UNIQUE, so if
+			// the prior owner still holds this address the update below throws a raw constraint
+			// error — CorePass saw a bare 500 ("unable to provide needed information"), the
+			// clean CORE_ID_TAKEN never ran, and the half-registered user + passkey were left
+			// orphaned. Reclaiming here also frees the address for the update.
 			// This coreId may already be linked to a DIFFERENT user. Two cases:
 			//  1. The prior binding is an ORPHAN from an incomplete registration — its user
 			//     still carries the anonymous `temp@<id>.com` placeholder (never enriched with
@@ -378,6 +356,46 @@ export function createEnrichmentEndpoint(options: CorePassPluginOptions) {
 					}
 				}
 			}
+
+
+			const userUpdate: Record<string, unknown> = {
+				name: coreIdToDisplayName(coreId)
+			};
+			if (enrichmentEmailValue) userUpdate.email = enrichmentEmailValue;
+			let updatedUser: unknown;
+			try {
+				updatedUser = await adapter.update({
+					model: 'user',
+					where: [{ field: 'id', value: userId }],
+					update: userUpdate
+				});
+			} catch (err) {
+				// Almost always a UNIQUE violation on user.email: the address belongs to an
+				// account this enrichment did not resolve above. Fail cleanly so CorePass gets
+				// an actionable code instead of a 500, and so no orphan row survives.
+				ctx.context.logger?.error?.('[corepass enrichment] failed to update user', err);
+				await failAndClean(new APIError('CONFLICT' as 'BAD_REQUEST', {
+					message: 'This email is already linked to another account. Use restore flow to recover access.',
+					code: 'EMAIL_TAKEN'
+				}));
+			}
+
+			if (options.requireAtLeastOneEmail && !isValidEmail(effectiveEmail)) {
+				await failAndClean(new APIError('BAD_REQUEST', {
+					message: 'Registration requires a valid email address.'
+				}));
+			}
+
+			const profileUpdate = {
+				userId,
+				coreId: coreIdUpper,
+				o18y: toBool(data.o18y) ? 1 : 0,
+				o21y: toBool(data.o21y) ? 1 : 0,
+				kyc: toBool(data.kyc) ? 1 : 0,
+				kycDoc: data.kycDoc ?? null,
+				backedUp: toBool(data.backedUp) ? 1 : 0,
+				providedTill
+			};
 
 			try {
 				await runAfterEnrichmentProfileWrite(

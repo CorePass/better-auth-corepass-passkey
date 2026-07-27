@@ -660,6 +660,7 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 			CORE_ID_NETWORK_NOT_ALLOWED: CORE_ID_NETWORK_NOT_ALLOWED_ERROR,
 			BACKED_UP_REQUIRED: BACKED_UP_REQUIRED_ERROR,
 			ENRICHMENT_REQUIRED: ENRICHMENT_REQUIRED_ERROR,
+			EMAIL_TAKEN: { message: 'This email is already linked to another account.', code: 'EMAIL_TAKEN' as const },
 			CORE_ID_NOT_FOUND: { message: 'No account found for this Core ID.', code: 'CORE_ID_NOT_FOUND' as const },
 			RESTORE_CHALLENGE_NOT_FOUND: { message: 'Restore challenge not found.', code: 'RESTORE_CHALLENGE_NOT_FOUND' as const },
 			RESTORE_CHALLENGE_EXPIRED: { message: 'Restore challenge expired.', code: 'RESTORE_CHALLENGE_EXPIRED' as const },
