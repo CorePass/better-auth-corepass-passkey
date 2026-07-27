@@ -211,12 +211,27 @@ export function createRestoreVerifyEndpoint(options: CorePassPluginOptions) {
 				});
 			}
 
-			// Find user by coreId — revert challenge if not found
-			const coreIdUpper = coreId.trim().toUpperCase();
-			const profile = await adapter.findOne({
-				model: 'corepass_profile',
-				where: [{ field: 'coreId', value: coreIdUpper }]
-			});
+			// Find user by coreId — revert challenge if not found.
+			// Enrichment always stores the Core ID uppercase, but `corepass_profile.coreId` is a
+			// plain unique TEXT column with no COLLATE NOCASE, so the comparison is
+			// case-sensitive. A row written by hand — notably the support flow that switches a
+			// user to a new Core ID after document verification — is easily lowercase, which is
+			// the form used almost everywhere else (site config, the signup bridge, explorers).
+			// A miss here is silent and total: the challenge reverts to `pending`, the error goes
+			// to CorePass rather than the browser, and the page just spins until it reports
+			// "expired" — so no replacement passkey is ever created. Case is not meaningful in an
+			// ICAN, so try the other forms before giving up. A later enrichment normalises the
+			// row back to uppercase.
+			const coreIdTrimmed = coreId.trim();
+			const coreIdUpper = coreIdTrimmed.toUpperCase();
+			let profile: unknown = null;
+			for (const candidate of [coreIdUpper, coreIdTrimmed, coreIdTrimmed.toLowerCase()]) {
+				profile = await adapter.findOne({
+					model: 'corepass_profile',
+					where: [{ field: 'coreId', value: candidate }]
+				});
+				if (profile) break;
+			}
 			if (!profile) {
 				// Revert to pending so user can try again with a different coreId (or same QR, new attempt)
 				await adapter.update({
