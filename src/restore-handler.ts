@@ -231,15 +231,13 @@ export function createRestoreVerifyEndpoint(options: CorePassPluginOptions) {
 			}
 			const userId = (profile as { userId: string }).userId;
 
-			// Delete all old passkeys for this user
-			try {
-				await adapter.delete({
-					model: 'passkey',
-					where: [{ field: 'userId', value: userId }]
-				});
-			} catch (err) {
-				ctx.context.logger?.error?.('Failed to delete old passkeys during restore', err);
-			}
+			// Old passkeys are deliberately NOT deleted here. Revoking them at this point —
+			// before the browser has registered a replacement — meant that any failure in the
+			// second half of the flow (CorePass declining, a WebAuthn error, the user closing
+			// the tab) left the account with zero credentials and only another restore as a
+			// way back, which revoked again on the next pass. Revocation now happens in the
+			// plugin's /passkey/verify-registration after-hook, once a replacement exists.
+			// Sessions are still dropped immediately below, so other devices lose access now.
 
 			// Delete all old sessions
 			const internal = ctx.context.internalAdapter as unknown as InternalAdapterDeleteUserSessions;

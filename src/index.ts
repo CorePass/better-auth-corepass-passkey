@@ -251,26 +251,20 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 							// Auto-generated `temp@<id>.com` emails must not satisfy requireAtLeastOneEmail —
 							// they are syntactically valid but were never supplied by the user.
 							if (needEmail && !isRealUserEmail(userEmail)) {
-								let cleaned = false;
-								try {
-									await cleanRegistrationAccount(
-										ctx as unknown as CleanupContext,
-										session.user.id,
-										(session.session as { token?: string }).token
-									);
-									cleaned = true;
-								} catch (err) {
-									ctx.context.logger?.error?.('Failed to clean account: email required', err);
-								}
-								if (cleaned) {
-									(ctx as { context: { session?: unknown } }).context.session = undefined;
-									deleteSessionCookie(ctx);
-									if (
-										isAllowedBeforePasskey(pathForAllow, method, gateOptions) ||
-										pathForAllow === '/sign-out'
-									) {
-										return;
-									}
+								// Block, do not delete. This user holds a working passkey and, under
+								// finalize:'after', a CorePass-signed identity; a missing email is a gap the
+								// app can still close. Deleting here destroyed complete accounts on an
+								// ordinary GET — and silently, because safe methods are allowed through, so
+								// the caller saw a normal null-session response with no error at all.
+								// /webauthn/data must stay reachable: re-running enrichment is exactly how
+								// the missing email arrives.
+								if (
+									isAllowedBeforePasskey(pathForAllow, method, gateOptions) ||
+									pathForAllow === '/sign-out' ||
+									pathForAllow === '/webauthn/data' ||
+									pathForAllow.startsWith('/webauthn/restore')
+								) {
+									return;
 								}
 								throw new APIError('FORBIDDEN', EMAIL_REQUIRED_ERROR);
 							}
@@ -411,6 +405,92 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 							}
 						}
 			throw new APIError('FORBIDDEN', PASSKEY_REQUIRED_ERROR);
+		})
+	};
+
+	/**
+	 * After POST /passkey/verify-registration, once the new credential row exists.
+	 *
+	 * Runs here rather than in a `passkey.create` database hook because
+	 * @better-auth/passkey writes the row with `ctx.context.adapter.create()`, which
+	 * bypasses `databaseHooks` entirely — so a create hook never fires for passkeys.
+	 *
+	 * Two jobs:
+	 *  1. Enforce the AAGUID allowlist. The row is deleted again if the authenticator
+	 *     is not allowed, so the policy actually holds.
+	 *  2. Finish a restore. Restore no longer revokes credentials up front; it defers
+	 *     to here, so the old passkeys die only once a replacement genuinely exists.
+	 */
+	const passkeyRegisteredAfterHook = {
+		matcher: (ctx: { path?: string }) => {
+			const p = (ctx.path ?? '').replace(/\/+$/, '');
+			return p.endsWith('/passkey/verify-registration');
+		},
+		handler: createAuthMiddleware(async (ctx) => {
+			const returned = ctx.context.returned;
+			type CreatedPasskey = { id?: string; userId?: string; aaguid?: string | null };
+			let created: CreatedPasskey | null = null;
+			if (returned instanceof Response) {
+				if (returned.status !== 200) return;
+				try {
+					created = (await returned.clone().json()) as CreatedPasskey;
+				} catch {
+					return;
+				}
+			} else if (typeof returned === 'object' && returned !== null && 'credentialID' in returned) {
+				created = returned as CreatedPasskey;
+			}
+			if (!created?.id || !created.userId) return;
+
+			const adapter = ctx.context.adapter as {
+				findOne: (arg: { model: string; where: { field: string; value: unknown }[] }) => Promise<unknown>;
+				findMany: (arg: { model: string; where: { field: string; value: unknown }[] }) => Promise<unknown[]>;
+				update: (arg: { model: string; where: { field: string; value: unknown }[]; update: Record<string, unknown> }) => Promise<unknown>;
+				delete: (arg: { model: string; where: { field: string; value: unknown }[] }) => Promise<unknown>;
+			};
+
+			if (hasAllowlist && !isAaguidAllowed(created.aaguid ?? undefined, effectiveAllowlist)) {
+				await adapter
+					.delete({ model: 'passkey', where: [{ field: 'id', value: created.id }] })
+					.catch(() => {});
+				throw new APIError('BAD_REQUEST', {
+					message: 'Authenticator not allowed by AAGUID policy',
+					code: 'AAGUID_NOT_ALLOWED'
+				});
+			}
+
+			// Only an unexpired, completed restore finalizes. Bounding on expiresAt keeps a
+			// stale row from a previous restore from revoking credentials when the user
+			// simply adds another passkey later.
+			const nowSec = Math.floor(Date.now() / 1000);
+			const challenges = (await adapter
+				.findMany({
+					model: 'restore_challenge',
+					where: [
+						{ field: 'userId', value: created.userId },
+						{ field: 'status', value: 'completed' }
+					]
+				})
+				.catch(() => [])) as { id: string; expiresAt: number }[];
+			const active = challenges.find((c) => c != null && c.expiresAt >= nowSec);
+			if (!active) return;
+
+			// Adapter operator support varies, so filter in JS and delete by primary key.
+			const existing = (await adapter
+				.findMany({ model: 'passkey', where: [{ field: 'userId', value: created.userId }] })
+				.catch(() => [])) as { id: string }[];
+			for (const row of existing) {
+				if (row?.id && row.id !== created.id) {
+					await adapter.delete({ model: 'passkey', where: [{ field: 'id', value: row.id }] }).catch(() => {});
+				}
+			}
+			await adapter
+				.update({
+					model: 'restore_challenge',
+					where: [{ field: 'id', value: active.id }],
+					update: { status: 'finalized' }
+				})
+				.catch(() => {});
 		})
 	};
 
@@ -558,7 +638,7 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 			}
 			return opts;
 		},
-		hooks: { before: [beforeHook], after: [afterHook, getSessionAfterHook] },
+		hooks: { before: [beforeHook], after: [afterHook, passkeyRegisteredAfterHook, getSessionAfterHook] },
 		endpoints: {
 			passkeyDataHead: createHeadEnrichmentEndpoint(options),
 			passkeyData: createEnrichmentEndpoint(options),
