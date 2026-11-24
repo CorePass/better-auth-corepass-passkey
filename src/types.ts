@@ -57,6 +57,13 @@ export type CorePassPluginOptions = {
 	onEnriched?: (args: CorePassEnrichedLifecycleArgs) => Promise<void> | void;
 	/** Timestamp window (ms). Default 600000. */
 	timestampWindowMs?: number;
+	/**
+	 * What to do when the X-Public-Key that signed an enrichment or restore does not belong to
+	 * the Core ID in the body. `'reject'` (default) answers 401 before anything changes.
+	 * `'log'` only logs a warning and carries on: use it briefly in staging to confirm CorePass
+	 * sends the profile's own key, never in production, where it leaves accounts open to takeover.
+	 */
+	publicKeyMismatch?: 'reject' | 'log';
 	/** Reject enrichment if userData.o18y !== true. */
 	requireO18y?: boolean;
 	/** Reject enrichment if userData.o21y !== true. */

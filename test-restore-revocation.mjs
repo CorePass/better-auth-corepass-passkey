@@ -22,12 +22,15 @@ import { passkey } from '@better-auth/passkey';
 import { memoryAdapter } from 'better-auth/adapters/memory';
 import { corepassPasskey } from './dist/index.js';
 import { readFileSync } from 'node:fs';
+import { newCorePassKey } from './test-keys.mjs';
 
 let failed = 0;
 const ok = (c, n) => { console.log(c ? '\x1b[32m✓\x1b[0m' : '\x1b[31m✗\x1b[0m', n); if (!c) failed++; };
 
 const AAGUID = '636f7265-7061-7373-6964-656e74697479';
-const COREID = 'CB408212E7CF4D5D2B7C83D95550437ED1B37C32B239';
+// The Core ID must belong to the signing key; the plugin rejects any other.
+const KEY = newCorePassKey();
+const COREID = KEY.coreId;
 
 function build(opts = {}) {
 	const db = { user: [], account: [], session: [], verification: [], passkey: [], corepass_profile: [], restore_challenge: [] };
@@ -100,12 +103,9 @@ console.log('\n── A: restore verification leaves existing passkeys alone ─
 		userId: null, status: 'pending', expiresAt: nowSec() + 300
 	}});
 
-	// Drive the REAL endpoint with a genuine Ed448 signature. The handler prefers the
-	// X-Public-Key header over deriving the key from a long-form Core ID, so a throwaway
-	// keypair works while coreId stays a valid mainnet ICAN.
+	// Drive the REAL endpoint with a genuine Ed448 signature from the key COREID belongs to.
 	const { ed448 } = await import('@noble/curves/ed448.js');
-	const priv = ed448.utils.randomSecretKey ? ed448.utils.randomSecretKey() : ed448.utils.randomPrivateKey();
-	const pub = ed448.getPublicKey(priv);
+	const { priv, pub } = KEY;
 	const hex = (b) => Buffer.from(b).toString('hex');
 
 	const payload = { coreId: COREID, restoreId: ch.id, timestamp: Date.now() * 1000 };
@@ -271,8 +271,7 @@ console.log('\n── F: enrichment when the email already belongs to the prior 
 
 	// CorePass posts the signed enrichment, carrying the email it holds for this Core ID.
 	const { ed448 } = await import('@noble/curves/ed448.js');
-	const priv = ed448.utils.randomSecretKey ? ed448.utils.randomSecretKey() : ed448.utils.randomPrivateKey();
-	const pub = ed448.getPublicKey(priv);
+	const { priv, pub } = KEY;
 	const hex = (b) => Buffer.from(b).toString('hex');
 	const payload = {
 		coreId: COREID, credentialId, timestamp: Date.now() * 1000,

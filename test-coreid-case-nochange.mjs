@@ -14,13 +14,16 @@ import { anonymous } from 'better-auth/plugins';
 import { passkey } from '@better-auth/passkey';
 import { memoryAdapter } from 'better-auth/adapters/memory';
 import { corepassPasskey } from './dist/index.js';
+import { newCorePassKey } from './test-keys.mjs';
 import { ed448 } from '@noble/curves/ed448.js';
 
 let failed = 0;
 const ok = (c, n) => { console.log(c ? '\x1b[32m✓\x1b[0m' : '\x1b[31m✗\x1b[0m', n); if (!c) failed++; };
 
 const AAGUID = '636f7265-7061-7373-6964-656e74697479';
-const COREID = 'CB408212E7CF4D5D2B7C83D95550437ED1B37C32B239';
+// The Core ID must belong to the signing key; the plugin rejects any other.
+const KEY = newCorePassKey();
+const COREID = KEY.coreId;
 const OTHER  = 'CB7712A2B0F3C4D5E6F708192A3B4C5D6E7F8091A2B3';
 const hex = (b) => Buffer.from(b).toString('hex');
 const nowSec = () => Math.floor(Date.now() / 1000);
@@ -65,8 +68,7 @@ async function run({ rows, signWith }) {
 	const ch = await ctx.adapter.create({ model: 'restore_challenge', data: {
 		userId: null, status: 'pending', expiresAt: nowSec() + 300
 	}});
-	const priv = ed448.utils.randomSecretKey ? ed448.utils.randomSecretKey() : ed448.utils.randomPrivateKey();
-	const pub = ed448.getPublicKey(priv);
+	const { priv, pub } = KEY;
 	const payload = { coreId: signWith, restoreId: ch.id, timestamp: Date.now() * 1000 };
 	const canonical = JSON.stringify({ coreId: payload.coreId, restoreId: payload.restoreId, timestamp: payload.timestamp });
 	const sig = ed448.sign(new TextEncoder().encode(`POST\n/webauthn/restore\n${canonical}`), priv);

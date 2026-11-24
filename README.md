@@ -85,6 +85,7 @@ Path is **`/webauthn/data`**. The **plugin owns this route**: in your app’s ha
 
 - **Body** (JSON): `coreId`, `credentialId`, `timestamp` (Unix **microseconds**), optional `userData`.
 - **Headers**: `X-Signature` (required, Ed448), optional `X-Public-Key` (57-byte key when using short-form Core ID), optional `X-Algorithm` (see [Algorithm](#algorithm-for-post-webauthndata)).
+- **Key ownership**: the signing key must belong to `coreId`: the short-form Core ID derived from `X-Public-Key` (network prefix + ICAN checksum + last 20 bytes of `sha3_256(publicKey)`) must equal `coreId`, or a long-form Core ID must carry that key. Otherwise the request is refused with **401** `PUBLIC_KEY_MISMATCH` before anything changes (see `publicKeyMismatch`).
 
 **Signature input** (what CorePass signs):
 
@@ -146,6 +147,7 @@ CorePass signs the restore payload the same way as enrichment:
 
 - `restoreSignaturePath` defaults to `/webauthn/restore` (configurable via `restoreSignaturePath`).
 - `timestamp` is Unix **microseconds** (same as enrichment).
+- The signing key must belong to `coreId`, as for enrichment; otherwise **401** `PUBLIC_KEY_MISMATCH`, and the challenge stays `pending`.
 
 ### Restore options
 
@@ -230,6 +232,7 @@ Add restore paths to `handlePasskeyDataRoute` — it already handles `/webauthn/
 | `signaturePath` | `string` | `'/webauthn/data'` | Path used when building the signature input string. |
 | `onEnriched` | `(args) => Promise<void> \| void` | `undefined` | Called only after CorePass enrichment succeeds, required flags pass, user/passkey updates complete, and `corepass_profile` is persisted. Receives `{ userId, coreId, profile, user, passkey, ctx }`. |
 | `timestampWindowMs` | `number` | `600_000` | Allowed clock skew for `timestamp` (microseconds). |
+| `publicKeyMismatch` | `'reject' \| 'log'` | `'reject'` | What to do when the key that signed an enrichment or restore does not belong to the Core ID in the body. `'reject'` answers **401** `PUBLIC_KEY_MISMATCH` before any change. `'log'` only logs a warning and carries on: use it briefly in staging to confirm CorePass sends the profile's own key, **never in production** (before 0.1.33 every request behaved like `'log'`, which let anyone take over an account). |
 | `requireEmail` | `boolean` | `false` | Require email **in enrichment payload only** (userData.email in POST /webauthn/data). Validated by regex. On failure after signature verification, user and sessions are deleted. |
 | `requireRegistrationEmail` | `boolean` | `false` | Require valid email in the **request body** of POST /sign-in/anonymous (e.g. `signIn.anonymous({ email })`) **before** the account is created. If missing or invalid, request is rejected (**400**). If user has passkey but still no valid email, account is cleaned and **403** `EMAIL_REQUIRED`. |
 | `requireAtLeastOneEmail` | `boolean` | `false` | Require email from at least one source: registration (form body) or enrichment. Enrichment overwrites when provided. All validated by regex. If neither provided, fail and clean (enrichment) or **403** and clean (access). |

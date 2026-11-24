@@ -14,6 +14,7 @@ import {
 	publicKeyFromCoreIdLongForm,
 	verifyEd448
 } from './utils/ed448.js';
+import { assertPublicKeyOwnsCoreId } from './utils/core-id.js';
 import { isValidEmail, isRealUserEmail } from './utils/email.js';
 import type {
 	CorePassEnrichedLifecycleArgs,
@@ -176,6 +177,23 @@ export function createEnrichmentEndpoint(options: CorePassPluginOptions) {
 				throw new APIError('UNAUTHORIZED', { message: 'Signature verification failed.' });
 			}
 
+			// The signature proves only that the caller holds the key it sent. Bind that key to the
+			// claimed Core ID before anything changes, or anyone could sign with their own key and
+			// claim someone else's Core ID.
+			assertPublicKeyOwnsCoreId({
+				coreId,
+				publicKey: publicKeyBytes,
+				mode: options.publicKeyMismatch,
+				route: 'enrichment',
+				logger: ctx.context.logger,
+				reject: () => {
+					throw new APIError('UNAUTHORIZED', {
+						message: 'The signing key does not belong to this Core ID.',
+						code: 'PUBLIC_KEY_MISMATCH'
+					});
+				}
+			});
+
 			const adapter = ctx.context.adapter as Adapter;
 			let passkey = await adapter.findOne({
 				model: 'passkey',
@@ -306,10 +324,16 @@ export function createEnrichmentEndpoint(options: CorePassPluginOptions) {
 			//  2. The prior binding is a REAL account (genuine, user-supplied email). That is a
 			//     legitimate existing account — do NOT silently take it over here; return 409 so
 			//     CorePass surfaces the explicit Restore flow (which revokes old devices on intent).
-			const existingProfileByCoreId = await adapter.findOne({
-				model: 'corepass_profile',
-				where: [{ field: 'coreId', value: coreIdUpper }]
-			});
+			// Case-insensitive, like restore: a hand-written (e.g. lowercase) row must not let a
+			// second account bind the same Core ID. Uppercase, what enrichment writes, wins.
+			let existingProfileByCoreId: unknown = null;
+			for (const candidate of [coreIdUpper, coreIdTrimmed, coreIdTrimmed.toLowerCase()]) {
+				existingProfileByCoreId = await adapter.findOne({
+					model: 'corepass_profile',
+					where: [{ field: 'coreId', value: candidate }]
+				});
+				if (existingProfileByCoreId) break;
+			}
 			if (existingProfileByCoreId) {
 				const existingUserId = (existingProfileByCoreId as { userId: string }).userId;
 				if (existingUserId !== userId) {
