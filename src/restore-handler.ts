@@ -20,6 +20,7 @@ import {
 	publicKeyFromCoreIdLongForm,
 	verifyEd448
 } from './utils/ed448.js';
+import { assertPublicKeyOwnsCoreId } from './utils/core-id.js';
 import type { CorePassPluginOptions } from './types.js';
 
 const RESTORE_BASE = '/webauthn/restore';
@@ -196,6 +197,23 @@ export function createRestoreVerifyEndpoint(options: CorePassPluginOptions) {
 			if (!valid) {
 				throw new APIError('UNAUTHORIZED', { message: 'Signature verification failed.' });
 			}
+
+			// The signature proves only that the caller holds the key it sent. Bind that key to the
+			// claimed Core ID before anything changes, or anyone could sign with their own key and
+			// claim someone else's Core ID.
+			assertPublicKeyOwnsCoreId({
+				coreId,
+				publicKey: publicKeyBytes,
+				mode: options.publicKeyMismatch,
+				route: 'restore',
+				logger: ctx.context.logger,
+				reject: () => {
+					throw new APIError('UNAUTHORIZED', {
+						message: 'The signing key does not belong to this Core ID.',
+						code: 'PUBLIC_KEY_MISMATCH'
+					});
+				}
+			});
 
 			// Atomically mark challenge as 'verifying' to prevent concurrent verify calls
 			try {
