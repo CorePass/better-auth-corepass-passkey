@@ -248,7 +248,7 @@ export function corepassPasskey(options: CorePassPluginOptions = {}) {
 						if (hasPasskey) {
 							const needEmail = options.requireRegistrationEmail || options.requireAtLeastOneEmail;
 							const userEmail = (session.user as { email?: string | null }).email;
-							// Auto-generated `temp@<id>.com` emails must not satisfy requireAtLeastOneEmail —
+							// Auto-generated anonymous placeholder emails must not satisfy requireAtLeastOneEmail —
 							// they are syntactically valid but were never supplied by the user.
 							if (needEmail && !isRealUserEmail(userEmail)) {
 								// Block, do not delete. This user holds a working passkey and, under

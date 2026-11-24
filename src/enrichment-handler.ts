@@ -305,7 +305,7 @@ export function createEnrichmentEndpoint(options: CorePassPluginOptions) {
 				where: [{ field: 'id', value: userId }]
 			})) as { email?: string | null } | null;
 			const rawRegistrationEmail = userBefore?.email?.trim() || null;
-			// Ignore the anonymous plugin's `temp@<id>.com` placeholder — it was not user-supplied.
+			// Ignore the anonymous plugin's placeholder (e.g. `<id>@anonymous.placeholder.invalid`): it was not user-supplied.
 			const registrationEmail = isRealUserEmail(rawRegistrationEmail) ? rawRegistrationEmail : null;
 			const effectiveEmail = enrichmentEmailValue ?? registrationEmail;
 
@@ -316,7 +316,7 @@ export function createEnrichmentEndpoint(options: CorePassPluginOptions) {
 			// orphaned. Reclaiming here also frees the address for the update.
 			// This coreId may already be linked to a DIFFERENT user. Two cases:
 			//  1. The prior binding is an ORPHAN from an incomplete registration — its user
-			//     still carries the anonymous `temp@<id>.com` placeholder (never enriched with
+			//     still carries the anonymous plugin's placeholder email (never enriched with
 			//     a real email). Because THIS enrichment is Ed448-signed by the coreId's owner,
 			//     ownership is cryptographically proven, so it is safe to reclaim the coreId:
 			//     delete the orphan and let this registration bind it. This self-heals users

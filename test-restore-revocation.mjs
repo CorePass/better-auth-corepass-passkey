@@ -175,7 +175,7 @@ console.log('\n── D: requireAtLeastOneEmail blocks instead of deleting ─�
 	const setCookies = typeof signIn.headers.getSetCookie === 'function'
 		? signIn.headers.getSetCookie() : [signIn.headers.get('set-cookie')].filter(Boolean);
 	const cookie = setCookies.map((c) => c.split(';')[0]).join('; ');
-	const user = db.user[db.user.length - 1];   // anonymous plugin gives it a temp@… email
+	const user = db.user[db.user.length - 1];   // the anonymous plugin gives it a placeholder email
 	const ctx = await auth.$context;
 	await ctx.adapter.create({ model: 'passkey', data: {
 		userId: user.id, credentialID: 'cred', publicKey: 'pk', counter: 0,
@@ -186,7 +186,7 @@ console.log('\n── D: requireAtLeastOneEmail blocks instead of deleting ─�
 		userId: user.id, coreId: COREID,
 		o18y: 1, o21y: 1, kyc: 1, kycDoc: null, backedUp: 0, providedTill: null
 	}});
-	ok(/^temp[-@]/i.test(user.email), `precondition: user carries a temp@ email (${user.email})`);
+	ok(/^temp[-@]|@(?:[^@\s]+\.)?invalid$/i.test(user.email), `precondition: user carries an anonymous placeholder email (${user.email})`);
 
 	// This is the request handle.ts issues on every page load.
 	const res = await auth.handler(new Request('http://localhost/auth/get-session', {
